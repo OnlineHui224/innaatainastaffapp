@@ -1,60 +1,67 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  Users,
-  MapPin,
-  CalendarClock,
-  AlertTriangle,
-  Clock,
-  ArrowRight,
-  Loader2,
-  TrendingUp,
-  CheckCircle2,
-  HelpCircle,
-} from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw, Users } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
   calculateDashboardMetrics,
   calculateJourneyStatus,
+  isOverdue,
+  isPhysicallyPresent,
   sortPilgrimsByPriority,
-  STATUS_META,
-  dateToStr,
   type DashboardMetrics,
 } from '@/lib/status';
+import { journeyStatusProvenance } from '@/lib/provenance';
+import { formatDate, priorityReason } from '@/lib/priority';
+import { friendlyError } from '@/lib/validation';
 import type { Pilgrim, SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
 import { BootstrapBanner } from '@/components/BootstrapBanner';
+import { MetricLine, MetricTile } from '@/components/MetricTile';
+import { Alert } from '@/components/ui/Alert';
+import { Button, ButtonLink } from '@/components/ui/Button';
+import { StatusBadge } from '@/components/ui/Badge';
+import { EmptyState, Skeleton, TableSkeleton } from '@/components/ui/Feedback';
+import { SectionHeading } from '@/components/ui/Panel';
+import { RecordCard, TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
 
 interface PilgrimRow extends Pilgrim {
   sub_agents: SubAgent | null;
 }
 
+const EMPTY_METRICS: DashboardMetrics = {
+  total: 0,
+  inSaudiArabia: 0,
+  departingIn3Days: 0,
+  overdue: 0,
+  unconfirmed: 0,
+  departureConfirmed: 0,
+  unverifiedImported: 0,
+};
+
 export default function Dashboard() {
   const [pilgrims, setPilgrims] = useState<PilgrimRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [metrics, setMetrics] = useState<DashboardMetrics>({
-    total: 0,
-    inSaudiArabia: 0,
-    departingIn3Days: 0,
-    overdue: 0,
-    unconfirmed: 0,
-    departureConfirmed: 0,
-    unverifiedImported: 0,
-  });
+  const [error, setError] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY_METRICS);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const { data, error } = await supabase
+      const { data, error: queryError } = await supabase
         .from('pilgrims')
         .select('*, sub_agents!pilgrims_sub_agent_id_fkey(*)')
         .order('created_at', { ascending: false });
-      if (error) throw error;
+      if (queryError) throw queryError;
       const rows = (data || []) as unknown as PilgrimRow[];
       setPilgrims(rows);
+      // Metric calculations are untouched — the redesign only changes presentation.
       setMetrics(calculateDashboardMetrics(rows));
     } catch (e) {
       console.error('Dashboard fetch error:', e);
+      setError(friendlyError(e));
+      setPilgrims([]);
+      setMetrics(EMPTY_METRICS);
     } finally {
       setLoading(false);
     }
@@ -64,214 +71,400 @@ export default function Dashboard() {
     fetchData();
   }, [fetchData]);
 
-  const priorityPilgrims = sortPilgrimsByPriority(pilgrims).slice(0, 8);
-  const today = dateToStr(new Date());
+  const priorityPilgrims = useMemo(() => sortPilgrimsByPriority(pilgrims).slice(0, 8), [pilgrims]);
 
-  const cards = [
-    {
-      label: 'Total Pilgrims',
-      value: metrics.total,
-      icon: Users,
-      iconBg: 'bg-brand-50 text-brand-600',
-      sub: 'All registered records',
-      ring: '',
-    },
-    {
-      label: 'In Saudi Arabia',
-      value: metrics.inSaudiArabia,
-      icon: MapPin,
-      iconBg: 'bg-emerald-50 text-emerald-600',
-      sub: 'Arrived, not yet departed',
-      ring: '',
-    },
-    {
-      label: 'Departing in 3 Days',
-      value: metrics.departingIn3Days,
-      icon: CalendarClock,
-      iconBg: 'bg-amber-50 text-amber-600',
-      sub: 'Expected return within 3 days',
-      ring: '',
-    },
-    {
-      label: 'Overdue Departures',
-      value: metrics.overdue,
-      icon: AlertTriangle,
-      iconBg: 'bg-red-50 text-red-600',
-      sub: 'Past expected return date',
-      ring: metrics.overdue > 0 ? 'ring-2 ring-red-200' : '',
-    },
-    {
-      label: 'Unconfirmed Departures',
-      value: metrics.unconfirmed,
-      icon: Clock,
-      iconBg: 'bg-slate-100 text-slate-600',
-      sub: 'Return date reached, no departure',
-      ring: '',
-    },
-    {
-      label: 'Departure Confirmed',
-      value: metrics.departureConfirmed,
-      icon: CheckCircle2,
-      iconBg: 'bg-brand-50 text-brand-600',
-      sub: 'Manually confirmed by staff',
-      ring: '',
-    },
-    {
-      label: 'Unverified Imported',
-      value: metrics.unverifiedImported,
-      icon: HelpCircle,
-      iconBg: 'bg-blue-50 text-blue-600',
-      sub: 'Imported, arrival not confirmed',
-      ring: '',
-    },
-  ];
+  /** Secondary context for confirmed presence — computed from the rows already loaded. */
+  const inSaudiAgentCount = useMemo(() => {
+    const agentIds = new Set<string>();
+    let unassigned = 0;
+    for (const p of pilgrims) {
+      if (!isPhysicallyPresent(p)) continue;
+      if (p.sub_agent_id) agentIds.add(p.sub_agent_id);
+      else unassigned += 1;
+    }
+    return { agents: agentIds.size, unassigned };
+  }, [pilgrims]);
+
+  const overdueAgentCount = useMemo(() => {
+    const agentIds = new Set<string>();
+    for (const p of pilgrims) {
+      if (isOverdue(p) && p.sub_agent_id) agentIds.add(p.sub_agent_id);
+    }
+    return agentIds.size;
+  }, [pilgrims]);
+
+  const today = formatDate(new Date().toISOString().slice(0, 10));
 
   return (
     <div>
       <PageHeader
+        eyebrow="Operations"
         title="Operations Dashboard"
-        subtitle={`Live operational overview — ${today}`}
-        icon={<TrendingUp className="h-6 w-6" />}
+        subtitle={`Live operational position as at ${today}. Every figure below states whether it is confirmed by a staff member or derived by the system from planned dates.`}
         actions={
-          <button
+          <Button
+            variant="secondary"
             onClick={fetchData}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+            loading={loading}
+            icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
           >
-            <Loader2 className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
-          </button>
+          </Button>
         }
       />
 
       <BootstrapBanner />
 
-      {/* Risk warning */}
-      {metrics.overdue > 0 && !loading && (
-        <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-5 animate-fade-in">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-            <p className="text-sm text-red-800 leading-relaxed">
-              <span className="font-bold">{metrics.overdue}</span> pilgrims have passed their expected return date without a confirmed departure. This is an operational flag — it does not confirm an overstay. Please follow up immediately.
-            </p>
-          </div>
-        </div>
+      {error && (
+        <Alert
+          tone="critical"
+          title="The dashboard could not be loaded"
+          className="mb-6"
+          actions={
+            <Button size="sm" variant="secondary" onClick={fetchData}>
+              Try again
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
       )}
 
-      {/* Cards */}
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm h-36 animate-pulse">
-              <div className="h-10 w-10 rounded-xl bg-slate-100" />
-              <div className="mt-4 h-8 w-20 bg-slate-100 rounded" />
-              <div className="mt-2 h-4 w-32 bg-slate-50 rounded" />
-            </div>
-          ))}
-        </div>
+        <DashboardSkeleton />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {cards.map((card) => {
-            const Icon = card.icon;
-            return (
-              <div
-                key={card.label}
-                className={`rounded-2xl border border-slate-100 bg-white p-6 shadow-sm transition-all hover:shadow-md ${card.ring}`}
-              >
-                <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${card.iconBg}`}>
-                  <Icon className="h-6 w-6" />
+        <div className="space-y-8">
+          {/* ── Tier 1 — Critical ───────────────────────────────────────── */}
+          <section aria-labelledby="tier-critical">
+            <SectionHeading>Tier 1 — Critical</SectionHeading>
+            <h2 id="tier-critical" className="sr-only">
+              Critical operational risk
+            </h2>
+            {metrics.overdue > 0 ? (
+              <div className="overflow-hidden rounded-lg border border-red-400 bg-white">
+                <div className="h-1 bg-red-600" aria-hidden="true" />
+                <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start">
+                  <AlertTriangle className="h-6 w-6 shrink-0 text-red-700" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-display text-base font-extrabold text-red-900">
+                      <span className="tabular-nums">{metrics.overdue}</span>{' '}
+                      {metrics.overdue === 1 ? 'pilgrim has' : 'pilgrims have'} passed the expected return date
+                      without a confirmed departure
+                    </p>
+                    <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-red-900/85">
+                      This is an operational flag — it does not confirm a legal overstay. It means no staff
+                      member has yet recorded a departure for these records. Please follow up immediately.
+                    </p>
+                    {overdueAgentCount > 0 && (
+                      <p className="mt-1.5 text-xs text-red-900/70">
+                        Spread across {overdueAgentCount} {overdueAgentCount === 1 ? 'sub-agent' : 'sub-agents'}.
+                      </p>
+                    )}
+                  </div>
+                  <ButtonLink
+                    to="/app/pilgrims?status=departure_overdue"
+                    variant="critical"
+                    className="shrink-0"
+                    icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
+                  >
+                    Review overdue records
+                  </ButtonLink>
                 </div>
-                <p className="mt-4 text-3xl font-display font-extrabold text-slate-900 tabular-nums">
-                  {card.value}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-slate-700">{card.label}</p>
-                <p className="mt-0.5 text-xs text-slate-400">{card.sub}</p>
               </div>
-            );
-          })}
+            ) : (
+              <div className="flex items-start gap-3 rounded-lg border border-emerald-300 bg-emerald-50/50 p-5">
+                <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-700" aria-hidden="true" />
+                <div>
+                  <p className="font-display text-sm font-bold text-emerald-900">
+                    No overdue departures on record
+                  </p>
+                  <p className="mt-1 text-sm text-emerald-900/80">
+                    No pilgrim currently sits past their expected return date without a confirmed departure.
+                  </p>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* ── Tier 2 — Requires follow-up ─────────────────────────────── */}
+          <section aria-labelledby="tier-followup">
+            <SectionHeading description="Records where the plan says movement should have happened, but no staff member has confirmed it.">
+              Tier 2 — Requires follow-up
+            </SectionHeading>
+            <h2 id="tier-followup" className="sr-only">
+              Records requiring follow-up
+            </h2>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <MetricTile
+                label="Unconfirmed departures"
+                value={metrics.unconfirmed}
+                provenance="derived"
+                emphasis="caution"
+                description="Pilgrims whose expected return date has been reached or passed with no confirmed departure."
+                subset={{
+                  label: 'are already past the expected return date',
+                  value: metrics.overdue,
+                  of: metrics.unconfirmed,
+                  emphasis: 'critical',
+                  to: '/app/pilgrims?status=departure_overdue',
+                }}
+                to="/app/pilgrims?status=departure_overdue"
+                linkLabel="Open follow-up list"
+              />
+              <MetricTile
+                label="Departing within 3 days"
+                value={metrics.departingIn3Days}
+                provenance="derived"
+                emphasis="caution"
+                description="Return expected today or within the next three days. Records due today also appear under unconfirmed departures above."
+                to="/app/pilgrims?status=departing_soon"
+                linkLabel="Open departing-soon list"
+              />
+            </div>
+          </section>
+
+          {/* ── Tier 3 — Confirmed presence ─────────────────────────────── */}
+          <section aria-labelledby="tier-presence">
+            <SectionHeading description="Pilgrims recorded as physically present in Saudi Arabia, with no confirmed departure.">
+              Tier 3 — Confirmed presence
+            </SectionHeading>
+            <h2 id="tier-presence" className="sr-only">
+              Confirmed presence
+            </h2>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <MetricTile
+                label="In Saudi Arabia"
+                value={metrics.inSaudiArabia}
+                provenance="confirmed"
+                emphasis="confirmed"
+                className="md:col-span-2"
+                context={
+                  <>
+                    <p>
+                      Across{' '}
+                      <span className="font-semibold tabular-nums text-slate-800">
+                        {inSaudiAgentCount.agents}
+                      </span>{' '}
+                      {inSaudiAgentCount.agents === 1 ? 'sub-agent' : 'sub-agents'}
+                      {inSaudiAgentCount.unassigned > 0 && (
+                        <>
+                          , plus{' '}
+                          <span className="font-semibold tabular-nums text-slate-800">
+                            {inSaudiAgentCount.unassigned}
+                          </span>{' '}
+                          unassigned
+                        </>
+                      )}
+                      .
+                    </p>
+                    <p className="mt-1 text-slate-500">
+                      Individual records show whether their presence is staff-confirmed or inferred from an
+                      unconfirmed arrival field.
+                    </p>
+                  </>
+                }
+                to="/app/pilgrims?status=in_saudi_arabia"
+                linkLabel="View pilgrims in Saudi Arabia"
+              />
+            </div>
+          </section>
+
+          {/* ── Tier 4 — General operational information ────────────────── */}
+          <section aria-labelledby="tier-general">
+            <SectionHeading>Tier 4 — General operational information</SectionHeading>
+            <h2 id="tier-general" className="sr-only">
+              General operational information
+            </h2>
+            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-300 bg-slate-300 sm:grid-cols-3">
+              <MetricLine
+                label="Total pilgrims"
+                value={metrics.total}
+                provenance="derived"
+                description="All registered records"
+                to="/app/pilgrims"
+              />
+              <MetricLine
+                label="Departure confirmed"
+                value={metrics.departureConfirmed}
+                provenance="confirmed"
+                description="Recorded by a named officer"
+                to="/app/pilgrims?status=departure_confirmed"
+              />
+              <MetricLine
+                label="Imported, arrival unverified"
+                value={metrics.unverifiedImported}
+                provenance="derived"
+                description="From a CSV batch, no arrival confirmation"
+                to="/app/pilgrims"
+              />
+            </div>
+          </section>
+
+          {/* ── Priority records ────────────────────────────────────────── */}
+          <PriorityRecords rows={priorityPilgrims} />
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Priority records */}
-      <div className="mt-8">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="font-display text-lg font-bold text-slate-900">Priority Records</h2>
-            <p className="text-sm text-slate-500">Ordered by operational urgency</p>
-          </div>
-          <Link
+function PriorityRecords({ rows }: { rows: PilgrimRow[] }) {
+  return (
+    <section aria-labelledby="priority-records">
+      <SectionHeading
+        description="Ordered by operational urgency. The reason column is drawn only from what each record actually holds."
+        actions={
+          <ButtonLink
             to="/app/pilgrims"
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-all"
+            variant="secondary"
+            size="sm"
+            icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}
           >
-            View All
-            <ArrowRight className="h-4 w-4" />
-          </Link>
-        </div>
+            View all pilgrims
+          </ButtonLink>
+        }
+      >
+        <span id="priority-records">Priority records</span>
+      </SectionHeading>
 
-        {loading ? (
-          <div className="rounded-2xl border border-slate-100 bg-white p-12 text-center text-slate-400">
-            <Loader2 className="h-6 w-6 animate-spin mx-auto" />
-          </div>
-        ) : priorityPilgrims.length === 0 ? (
-          <div className="rounded-2xl border border-slate-100 bg-white p-12 text-center">
-            <Users className="h-10 w-10 text-slate-300 mx-auto" />
-            <p className="mt-3 text-sm text-slate-500">No pilgrim records yet.</p>
-            <Link
-              to="/app/pilgrims/new"
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-all"
-            >
-              Add First Pilgrim
-            </Link>
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50/60">
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600">Name</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600">Nationality</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 hidden sm:table-cell">Scheduled Departure</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600">Status</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 hidden md:table-cell">Sub-Agent</th>
-                    <th className="px-4 py-3"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {priorityPilgrims.map((p) => {
-                    const status = calculateJourneyStatus(p);
-                    const meta = STATUS_META[status];
-                    return (
-                      <tr key={p.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/40 transition-colors">
-                        <td className="px-4 py-3 font-semibold text-slate-900">{p.full_name}</td>
-                        <td className="px-4 py-3 text-slate-600">{p.nationality}</td>
-                        <td className="px-4 py-3 text-slate-600 hidden sm:table-cell">{p.expected_departure_date}</td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${meta.bgColor} ${meta.color} border ${meta.borderColor}`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${meta.dotColor}`} />
-                            {meta.label}
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={<Users className="h-5 w-5" aria-hidden="true" />}
+          title="No pilgrim records yet"
+          description="Once pilgrims are registered or imported, the records needing attention first will be listed here."
+          action={<ButtonLink to="/app/pilgrims/new">Add the first pilgrim</ButtonLink>}
+        />
+      ) : (
+        <>
+          {/* Desktop and laptop */}
+          <div className="hidden lg:block">
+            <TableFrame caption="Pilgrim records ordered by operational urgency">
+              <THead>
+                <tr>
+                  <TH>Name</TH>
+                  <TH>Nationality</TH>
+                  <TH>Scheduled / expected departure</TH>
+                  <TH>Status</TH>
+                  <TH>Sub-agent</TH>
+                  <TH>Why it is first</TH>
+                  <TH align="right">
+                    <span className="sr-only">Actions</span>
+                  </TH>
+                </tr>
+              </THead>
+              <TBody>
+                {rows.map((p) => {
+                  const status = calculateJourneyStatus(p);
+                  const reason = priorityReason(p, status);
+                  return (
+                    <TR key={p.id}>
+                      <TD className="font-semibold text-slate-900">{p.full_name}</TD>
+                      <TD>{p.nationality}</TD>
+                      <TD className="whitespace-nowrap">
+                        <span className="block">{formatDate(p.expected_departure_date, 'Not set')}</span>
+                        {p.expected_return_date && (
+                          <span className="mt-0.5 block text-xs text-slate-500">
+                            Return {formatDate(p.expected_return_date)}
                           </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600 hidden md:table-cell">
-                          {p.sub_agents?.organisation_name || <span className="text-slate-400">Unassigned</span>}
-                        </td>
-                        <td className="px-4 py-3 text-right">
+                        )}
+                      </TD>
+                      <TD>
+                        <StatusBadge status={status} record={p} />
+                      </TD>
+                      <TD>
+                        {p.sub_agents ? (
                           <Link
-                            to={`/app/pilgrims/${p.id}`}
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700"
+                            to={`/app/sub-agents/${p.sub_agents.id}`}
+                            className="text-brand-700 hover:underline"
                           >
-                            View <ArrowRight className="h-3 w-3" />
+                            {p.sub_agents.organisation_name}
                           </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        ) : (
+                          <span className="text-slate-500">Unassigned</span>
+                        )}
+                      </TD>
+                      <TD className="max-w-xs text-xs leading-relaxed text-slate-600">{reason.text}</TD>
+                      <TD align="right">
+                        <Link
+                          to={`/app/pilgrims/${p.id}`}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline"
+                        >
+                          View
+                          <ArrowRight className="h-3 w-3" aria-hidden="true" />
+                        </Link>
+                      </TD>
+                    </TR>
+                  );
+                })}
+              </TBody>
+            </TableFrame>
           </div>
-        )}
-      </div>
 
+          {/* Tablet and mobile — the reason becomes secondary record text rather
+              than being forced into another column. */}
+          <div className="space-y-3 lg:hidden">
+            {rows.map((p) => {
+              const status = calculateJourneyStatus(p);
+              const reason = priorityReason(p, status);
+              const provenance = journeyStatusProvenance(status, p);
+              return (
+                <RecordCard
+                  key={p.id}
+                  accent={
+                    status === 'departure_overdue'
+                      ? 'critical'
+                      : status === 'departing_soon'
+                        ? 'caution'
+                        : 'none'
+                  }
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <Link
+                        to={`/app/pilgrims/${p.id}`}
+                        className="font-semibold text-slate-900 hover:text-brand-700 hover:underline"
+                      >
+                        {p.full_name}
+                      </Link>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        {p.nationality}
+                        {p.sub_agents ? ` · ${p.sub_agents.organisation_name}` : ' · Unassigned'}
+                      </p>
+                    </div>
+                    <StatusBadge status={status} record={p} className="shrink-0" />
+                  </div>
+                  <p className="mt-3 border-t border-slate-200 pt-2.5 text-xs leading-relaxed text-slate-600">
+                    {reason.text}
+                  </p>
+                  <p className="mt-1 text-2xs uppercase tracking-wide text-slate-400">
+                    {provenance === 'confirmed' ? 'Confirmed by staff' : 'Derived by the system'}
+                  </p>
+                </RecordCard>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-8" aria-busy="true">
+      <Skeleton className="h-24 w-full rounded-lg" />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Skeleton className="h-40 rounded-lg" />
+        <Skeleton className="h-40 rounded-lg" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Skeleton className="h-40 rounded-lg" />
+        <Skeleton className="h-40 rounded-lg" />
+      </div>
+      <TableSkeleton rows={6} columns={6} />
+      <p className="sr-only" role="status">
+        Loading the operations dashboard.
+      </p>
     </div>
   );
 }

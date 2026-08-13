@@ -1,44 +1,59 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  FileScan,
-  ChevronRight,
-  Loader2,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  FileScan,
+  Loader2,
+  PenLine,
   Save,
-  AlertCircle,
-  Info,
-  XCircle,
-  Bus,
-  Building2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { logAudit } from '@/lib/audit';
+import { formatDateTime } from '@/lib/priority';
 import { WorkflowStepper } from '@/components/visa/WorkflowStepper';
 import { CaseDetailsCard } from '@/components/visa/CaseDetailsCard';
 import { UploadVisaCard } from '@/components/visa/UploadVisaCard';
-import { ReviewScreen } from '@/components/visa/ReviewScreen';
+import {
+  REQUIRED_VERIFICATION_KEYS,
+  ReviewScreen,
+  allRequiredVerified,
+  countVerified,
+} from '@/components/visa/ReviewScreen';
 import { SuccessScreen } from '@/components/visa/SuccessScreen';
 import { ProcessingSummary } from '@/components/visa/ProcessingSummary';
 import { ViewerReadOnly } from '@/components/visa/ViewerReadOnly';
+import { ProvenanceLadder, buildCaseProvenance } from '@/components/visa/ProvenanceLadder';
+import { TransportSummary } from '@/components/visa/TransportSummary';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { PageHeader } from '@/components/PageHeader';
+import { Alert } from '@/components/ui/Alert';
+import { Button } from '@/components/ui/Button';
+import { Identifier } from '@/components/ui/Field';
+import { Panel } from '@/components/ui/Panel';
 import type { ComboboxOption } from '@/components/visa/SearchableCombobox';
 import type {
-  VisaCaseDetails,
-  VisaExtractionResult,
-  PilgrimMatchResult,
-  WorkflowStep,
+  ExtractedFieldKey,
   ExtractionStatus,
   MatchStatus,
+  PilgrimMatchResult,
+  VisaCaseDetails,
+  VisaExtractionResult,
+  WorkflowStep,
 } from '@/types/visa';
 import {
+  EXTRACTION_STAGES,
   EXTRACTION_STATUS_MESSAGES,
+  editFieldValue,
+  emptyExtractedField,
   emptyTransportSelection,
+  unverifyField,
+  verifyField,
 } from '@/types/visa';
 import type { SubAgent } from '@/types';
+import { cn } from '@/lib/utils';
 
 const AI_DAILY_LIMIT = 30;
 
@@ -69,39 +84,12 @@ function emptyDetails(): VisaCaseDetails {
 
 function emptyExtraction(): VisaExtractionResult {
   return {
-    passengerName: { value: null, confidence: null, sourcePage: null, needsReview: false },
-    passportNumber: { value: null, confidence: null, sourcePage: null, needsReview: false },
-    visaNumber: { value: null, confidence: null, sourcePage: null, needsReview: false },
-    nationality: { value: null, confidence: null, sourcePage: null, needsReview: false },
+    passengerName: emptyExtractedField(),
+    passportNumber: emptyExtractedField(),
+    visaNumber: emptyExtractedField(),
+    nationality: emptyExtractedField(),
     extractedAt: '',
   };
-}
-
-type AlertType = 'info' | 'warning' | 'error' | 'success';
-
-interface AlertState {
-  type: AlertType;
-  message: string;
-}
-
-function AlertBanner({ alert, onDismiss }: { alert: AlertState; onDismiss: () => void }) {
-  const styles: Record<AlertType, { bg: string; border: string; icon: typeof Info; iconColor: string; textColor: string }> = {
-    info: { bg: 'bg-blue-50', border: 'border-blue-200', icon: Info, iconColor: 'text-blue-600', textColor: 'text-blue-800' },
-    warning: { bg: 'bg-amber-50', border: 'border-amber-200', icon: AlertCircle, iconColor: 'text-amber-600', textColor: 'text-amber-800' },
-    error: { bg: 'bg-red-50', border: 'border-red-200', icon: XCircle, iconColor: 'text-red-600', textColor: 'text-red-800' },
-    success: { bg: 'bg-green-50', border: 'border-green-200', icon: CheckCircle2, iconColor: 'text-green-600', textColor: 'text-green-800' },
-  };
-  const s = styles[alert.type];
-  const Icon = s.icon;
-  return (
-    <div className={`flex items-start gap-2.5 rounded-xl border ${s.bg} ${s.border} px-4 py-3 animate-fade-in`}>
-      <Icon className={`h-4 w-4 ${s.iconColor} shrink-0 mt-0.5`} />
-      <p className={`text-sm ${s.textColor} flex-1`}>{alert.message}</p>
-      <button onClick={onDismiss} className={`shrink-0 ${s.iconColor} hover:opacity-70`}>
-        <XCircle className="h-4 w-4" />
-      </button>
-    </div>
-  );
 }
 
 export default function VisaLoggerPage() {
@@ -115,7 +103,9 @@ export default function VisaLoggerPage() {
 
   const [details, setDetails] = useState<VisaCaseDetails>(emptyDetails());
   const [file, setFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [extraction, setExtraction] = useState<VisaExtractionResult>(emptyExtraction());
+  const [manualEntry, setManualEntry] = useState(false);
   const [match, setMatch] = useState<PilgrimMatchResult>({
     status: 'no_match',
     pilgrim: null,
@@ -129,7 +119,9 @@ export default function VisaLoggerPage() {
   const [staffOptions, setStaffOptions] = useState<ComboboxOption[]>([]);
 
   const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus>('idle');
-  const [alert, setAlert] = useState<AlertState | null>(null);
+  const [alert, setAlert] = useState<{ tone: 'info' | 'warning' | 'critical' | 'success'; message: string } | null>(
+    null,
+  );
   const [confirmDialog, setConfirmDialog] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState('');
@@ -177,10 +169,18 @@ export default function VisaLoggerPage() {
     loadInitial();
   }, []);
 
-  const pilgrimSearchTimer = useMemo(
-    () => ({ current: null as ReturnType<typeof setTimeout> | null }),
-    [],
-  );
+  /* Local preview for the uploaded document, shown beside the extracted fields. */
+  useEffect(() => {
+    if (!file || !file.type.startsWith('image/')) {
+      setFilePreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setFilePreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const pilgrimSearchTimer = useMemo(() => ({ current: null as ReturnType<typeof setTimeout> | null }), []);
 
   const handlePilgrimSearch = useCallback(
     (query: string) => {
@@ -218,7 +218,7 @@ export default function VisaLoggerPage() {
     [pilgrimSearchTimer],
   );
 
-  // Validation
+  // ── Validation ─────────────────────────────────────────────────────
   const errors: Record<string, string> = {};
   const missingFields: string[] = [];
 
@@ -251,14 +251,40 @@ export default function VisaLoggerPage() {
 
   const caseDetailsValid = Object.keys(errors).length === 0;
   const isReady = caseDetailsValid && !!file;
+  const verifiedCount = countVerified(extraction);
+  const reviewComplete = allRequiredVerified(extraction);
 
   const handleDetailsChange = useCallback((updates: Partial<VisaCaseDetails>) => {
     setDetails((prev) => ({ ...prev, ...updates }));
   }, []);
 
+  // ── Explicit field verification ────────────────────────────────────
+  /** An edit records the new value and clears any prior verification. */
+  const handleFieldEdit = useCallback((key: ExtractedFieldKey, value: string) => {
+    setExtraction((prev) => ({ ...prev, [key]: editFieldValue(prev[key], value) }));
+  }, []);
+
+  /** The only route to a verified field. Officer and timestamp come from the session. */
+  const handleFieldVerify = useCallback(
+    (key: ExtractedFieldKey) => {
+      setExtraction((prev) => ({
+        ...prev,
+        [key]: verifyField(prev[key], {
+          id: profile?.id ?? null,
+          name: profile?.full_name ?? 'Staff member',
+        }),
+      }));
+    },
+    [profile?.id, profile?.full_name],
+  );
+
+  const handleFieldUnverify = useCallback((key: ExtractedFieldKey) => {
+    setExtraction((prev) => ({ ...prev, [key]: unverifyField(prev[key]) }));
+  }, []);
+
   const goToUpload = useCallback(() => {
     if (!caseDetailsValid) {
-      setAlert({ type: 'warning', message: 'Please complete the required fields before proceeding.' });
+      setAlert({ tone: 'warning', message: 'Complete the required case details before continuing.' });
       return;
     }
     setCompletedSteps((prev) => new Set(prev).add('case_details'));
@@ -273,62 +299,69 @@ export default function VisaLoggerPage() {
 
   const handleExtract = useCallback(async () => {
     if (!file) {
-      setAlert({ type: 'warning', message: 'Please upload a visa document before extraction.' });
+      setAlert({ tone: 'warning', message: 'Upload a visa document before starting extraction.' });
       return;
     }
     if (aiRequestsRemaining <= 0) {
-      setAlert({ type: 'error', message: 'Your daily AI extraction limit has been reached. Please try again tomorrow.' });
+      setAlert({
+        tone: 'critical',
+        message: 'The daily AI extraction limit has been reached. Continue with manual entry, or try again tomorrow.',
+      });
       return;
     }
 
     setAlert(null);
-    const steps: ExtractionStatus[] = [
-      'securing',
-      'uploading',
-      'extracting',
-      'matching',
-      'checking_duplicates',
-      'preparing_review',
-    ];
+    setManualEntry(false);
 
-    for (const s of steps) {
-      setExtractionStatus(s);
-      await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 600));
+    for (const stage of EXTRACTION_STAGES) {
+      setExtractionStatus(stage);
+      await new Promise((resolve) => setTimeout(resolve, 700));
     }
 
-    const simulatedExtraction: VisaExtractionResult = {
+    /* Extracted values start UNVERIFIED. No amount of confidence promotes a value
+       to reviewed — only an officer pressing Verify does that. */
+    const extractedName = details.pilgrimName || '';
+    const extractedPassport = details.passportNumber || '';
+    const extractedVisa = `VISA-${Date.now().toString().slice(-6)}`;
+
+    setExtraction({
       passengerName: {
-        value: details.pilgrimName || 'Extracted Passenger Name',
+        ...emptyExtractedField(),
+        value: extractedName || null,
+        originalValue: extractedName || null,
         confidence: 'high',
         sourcePage: 1,
-        needsReview: false,
       },
       passportNumber: {
-        value: details.passportNumber || 'EXTRACTED12345',
+        ...emptyExtractedField(),
+        value: extractedPassport || null,
+        originalValue: extractedPassport || null,
         confidence: 'high',
         sourcePage: 1,
-        needsReview: false,
       },
       visaNumber: {
-        value: `VISA-${Date.now().toString().slice(-6)}`,
+        ...emptyExtractedField(),
+        value: extractedVisa,
+        originalValue: extractedVisa,
         confidence: 'medium',
         sourcePage: 1,
         needsReview: true,
       },
+      // Nationality is surfaced even when the extractor produced nothing, so it
+      // can never pass through the workflow unseen.
       nationality: {
+        ...emptyExtractedField(),
         value: null,
+        originalValue: null,
         confidence: null,
         sourcePage: null,
-        needsReview: false,
+        needsReview: true,
       },
       extractedAt: new Date().toISOString(),
-    };
+    });
 
-    const matchStatus: MatchStatus = details.pilgrimId
-      ? 'exact_passport_match'
-      : 'no_match';
-
-    const simulatedMatch: PilgrimMatchResult = {
+    const matchStatus: MatchStatus = details.pilgrimId ? 'exact_passport_match' : 'no_match';
+    setMatch({
       status: matchStatus,
       pilgrim: details.pilgrimId
         ? {
@@ -341,33 +374,66 @@ export default function VisaLoggerPage() {
         : null,
       conflicts: [],
       alternatives: [],
-    };
+    });
 
-    setExtraction(simulatedExtraction);
-    setMatch(simulatedMatch);
     setExtractionStatus('complete');
     setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
     setStep('review_extraction');
   }, [file, aiRequestsRemaining, details]);
 
-  const handleExtractionChange = useCallback((updates: Partial<VisaExtractionResult>) => {
-    setExtraction((prev) => ({ ...prev, ...updates }));
-  }, []);
+  /** Manual-entry path — used when extraction fails or the limit is exhausted. */
+  const startManualEntry = useCallback(() => {
+    setManualEntry(true);
+    setExtractionStatus('idle');
+    setExtraction({
+      ...emptyExtraction(),
+      extractedAt: new Date().toISOString(),
+    });
+    setMatch({
+      status: details.pilgrimId ? 'exact_passport_match' : 'no_match',
+      pilgrim: details.pilgrimId
+        ? {
+            id: details.pilgrimId,
+            full_name: details.pilgrimName,
+            passport_number: details.passportNumber,
+            visa_number: null,
+            agent_name: details.agentName,
+          }
+        : null,
+      conflicts: [],
+      alternatives: [],
+    });
+    setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
+    setStep('review_extraction');
+    setAlert({
+      tone: 'info',
+      message: 'Manual entry. Type each value from the document, then verify it explicitly.',
+    });
+  }, [details]);
 
   const goToConfirm = useCallback(() => {
+    if (!reviewComplete) {
+      setAlert({
+        tone: 'warning',
+        message: 'Every extracted field must be explicitly verified before this case can continue.',
+      });
+      return;
+    }
     setCompletedSteps((prev) => new Set(prev).add('review_extraction'));
     setStep('confirm_save');
     setAlert(null);
-  }, []);
+  }, [reviewComplete]);
 
-  const backToReview = useCallback(() => {
-    setStep('review_extraction');
-  }, []);
+  const backToReview = useCallback(() => setStep('review_extraction'), []);
 
-  // Save
+  // ── Save ───────────────────────────────────────────────────────────
   const handleConfirmSave = useCallback(async () => {
     if (!details.pilgrimId) {
-      setAlert({ type: 'error', message: 'No pilgrim selected. Please go back and select a pilgrim.' });
+      setAlert({ tone: 'critical', message: 'No pilgrim is selected. Go back and select a pilgrim record.' });
+      return;
+    }
+    if (!allRequiredVerified(extraction)) {
+      setAlert({ tone: 'warning', message: 'Every extracted field must be verified before saving.' });
       return;
     }
 
@@ -375,7 +441,6 @@ export default function VisaLoggerPage() {
     setConfirmDialog(false);
 
     try {
-      // If admin + new agent, create permanent agent
       let agentId = details.agentId;
       if (details.agentIsProposed && details.newAgent && isAdminOrHigher) {
         const { data: newAgent, error: agentErr } = await supabase
@@ -406,7 +471,6 @@ export default function VisaLoggerPage() {
           performedByName: profile?.full_name ?? '',
         });
       } else if (details.agentIsProposed && details.newAgent) {
-        // Non-admin: save as proposed agent
         await supabase.from('proposed_agents').insert({
           organisation_name: details.newAgent.organisationName.trim(),
           contact_person: details.newAgent.contactPerson || null,
@@ -428,14 +492,14 @@ export default function VisaLoggerPage() {
         });
       }
 
-      // Build transport summary string
       const t = details.transport;
       const effectivePrice = t.hasPriceOverride && t.agreedPrice != null ? t.agreedPrice : t.referencePrice;
       const transportSummary = t.routeName
-        ? `${t.routeName}${t.vehicleTypeName ? ' • ' + t.vehicleTypeName : ''}${effectivePrice != null ? ' • SAR ' + (effectivePrice * t.numberOfVehicles).toFixed(0) : ''}`
+        ? `${t.routeName}${t.vehicleTypeName ? ' • ' + t.vehicleTypeName : ''}${
+            effectivePrice != null ? ' • SAR ' + (effectivePrice * t.numberOfVehicles).toFixed(0) : ''
+          }`
         : '';
 
-      // Save custom hotels to hotel_references if needed (marked CUSTOM_ITINERARY_HOTEL)
       const makkahHotelName = details.makkahHotelName;
       if (details.makkahHotelIsCustom && details.makkahCustomHotel && isAdminOrHigher) {
         const { data: inserted } = await supabase
@@ -490,7 +554,6 @@ export default function VisaLoggerPage() {
         }
       }
 
-      // Audit transport selections
       if (t.routeId && !t.isCustomRoute) {
         await logAudit({
           action: 'transport_route_selected',
@@ -516,7 +579,11 @@ export default function VisaLoggerPage() {
             recordType: 'transport',
             recordLabel: t.routeName,
             previousValue: { rate: t.referencePrice },
-            newValue: { agreed_rate: t.agreedPrice, reason: t.overrideReason, approver: t.overrideApproverName },
+            newValue: {
+              agreed_rate: t.agreedPrice,
+              reason: t.overrideReason,
+              approver: t.overrideApproverName,
+            },
             performedBy: profile?.id ?? null,
             performedByName: profile?.full_name ?? '',
           });
@@ -527,7 +594,11 @@ export default function VisaLoggerPage() {
           action: 'custom_transport_route_entered',
           recordType: 'transport',
           recordLabel: `${t.customOrigin} → ${t.customDestination}`,
-          newValue: { vehicle: t.vehicleTypeName, agreed_price: t.agreedPrice, source: 'CUSTOM_ROUTE' },
+          newValue: {
+            vehicle: t.vehicleTypeName,
+            agreed_price: t.agreedPrice,
+            source: 'CUSTOM_ROUTE',
+          },
           performedBy: profile?.id ?? null,
           performedByName: profile?.full_name ?? '',
         });
@@ -546,20 +617,28 @@ export default function VisaLoggerPage() {
         updated_by: profile?.id ?? null,
       };
 
-      const { error } = await supabase
-        .from('pilgrims')
-        .update(updateData)
-        .eq('id', details.pilgrimId);
-
+      const { error } = await supabase.from('pilgrims').update(updateData).eq('id', details.pilgrimId);
       if (error) throw error;
 
+      /* The verification trail travels with the audit entry, so who reviewed
+         which value — and when — is recoverable after the fact. */
       await logAudit({
         action: 'visa_record_saved',
         recordType: 'pilgrim',
         recordId: details.pilgrimId,
         recordLabel: details.pilgrimName,
         previousValue: { visa_number: null },
-        newValue: { visa_number: extraction.visaNumber.value, visa_company: details.visaCompany },
+        newValue: {
+          visa_number: extraction.visaNumber.value,
+          visa_company: details.visaCompany,
+          verified_fields: REQUIRED_VERIFICATION_KEYS.map((key) => ({
+            field: key,
+            value: extraction[key].value,
+            edited: extraction[key].edited,
+            verified_by: extraction[key].verifiedByName,
+            verified_at: extraction[key].verifiedAt,
+          })),
+        },
         performedBy: profile?.id ?? null,
         performedByName: profile?.full_name ?? '',
       });
@@ -567,12 +646,12 @@ export default function VisaLoggerPage() {
       setSavedAt(new Date().toISOString());
       setCompletedSteps((prev) => new Set(prev).add('confirm_save'));
       setStep('confirm_save');
-      setAlert({ type: 'success', message: 'Visa record saved successfully.' });
+      setAlert({ tone: 'success', message: 'Visa record saved.' });
     } catch (e) {
       console.error('Save failed:', e);
       setAlert({
-        type: 'error',
-        message: 'Failed to save the visa record. Please check your connection and try again.',
+        tone: 'critical',
+        message: 'The visa record could not be saved. Check your connection and try again.',
       });
     } finally {
       setSaving(false);
@@ -583,12 +662,8 @@ export default function VisaLoggerPage() {
     setDetails(emptyDetails());
     setFile(null);
     setExtraction(emptyExtraction());
-    setMatch({
-      status: 'no_match',
-      pilgrim: null,
-      conflicts: [],
-      alternatives: [],
-    });
+    setManualEntry(false);
+    setMatch({ status: 'no_match', pilgrim: null, conflicts: [], alternatives: [] });
     setExtractionStatus('idle');
     setAlert(null);
     setCompletedSteps(new Set());
@@ -600,267 +675,395 @@ export default function VisaLoggerPage() {
     if (details.pilgrimId) navigate(`/app/pilgrims/${details.pilgrimId}`);
   }, [details.pilgrimId, navigate]);
 
-  const handleViewHistory = useCallback(() => {
-    navigate('/app/audit-history');
-  }, [navigate]);
+  const handleViewHistory = useCallback(() => navigate('/app/audit-history'), [navigate]);
 
-  const showSuccess = step === 'confirm_save' && completedSteps.has('confirm_save') && savedAt;
+  const showSuccess = step === 'confirm_save' && completedSteps.has('confirm_save') && Boolean(savedAt);
+  const isProcessing =
+    extractionStatus !== 'idle' && extractionStatus !== 'complete' && extractionStatus !== 'error';
 
+  // ── Viewer — a completed read-only browser, not a disabled processing UI ──
   if (isViewer) {
     return (
-      <div className="max-w-[1200px] mx-auto">
-        <div className="mb-6">
-          <nav className="text-xs text-slate-400 mb-2">
-            <span>Operations Automation Pro</span>
-            <ChevronRight className="inline h-3 w-3 mx-1" />
-            <span className="text-slate-600 font-medium">Visa & Contract Logger</span>
-          </nav>
-          <h1 className="font-display font-bold text-2xl text-navy-900">Visa & Contract Logger</h1>
-          <p className="mt-1 text-sm text-slate-500">Extract visa information, match it to an existing pilgrim and securely record confirmed details.</p>
-        </div>
+      <div>
+        <PageHeader
+          eyebrow="Operations"
+          title="Visa &amp; Contract Logger"
+          subtitle="Browse the visa records already saved against pilgrims on the platform."
+        />
         <ViewerReadOnly />
       </div>
     );
   }
 
-  const isProcessing = extractionStatus !== 'idle' && extractionStatus !== 'complete' && extractionStatus !== 'error';
+  const reviewOfficer =
+    REQUIRED_VERIFICATION_KEYS.map((key) => extraction[key].verifiedByName).find(Boolean) ?? null;
+  const verifiedTimestamps = REQUIRED_VERIFICATION_KEYS.map((key) => extraction[key].verifiedAt)
+    .filter((value): value is string => Boolean(value))
+    .sort();
+  const lastVerifiedAt = verifiedTimestamps.length > 0 ? verifiedTimestamps[verifiedTimestamps.length - 1] : null;
 
-  // Build confirmation summary rows
-  const confirmationRows = [
-    { label: 'Passenger Name', value: extraction.passengerName.value },
-    { label: 'Passport Number', value: extraction.passportNumber.value || details.passportNumber },
-    { label: 'Visa Number', value: extraction.visaNumber.value },
-    {
-      label: 'Agent',
-      value: details.agentName + (details.agentIsProposed ? (isAdminOrHigher ? ' (new — will be created)' : ' (proposed — pending approval)') : ''),
-    },
-    { label: 'Visa Company', value: details.visaCompany },
-    {
-      label: 'Makkah Hotel',
-      value: details.makkahHotelName + (details.makkahHotelIsCustom ? ' (custom)' : ''),
-    },
-    {
-      label: 'Madinah Hotel',
-      value: details.madinahHotelName + (details.madinahHotelIsCustom ? ' (custom)' : ''),
-    },
-    {
-      label: 'Transport Route',
-      value: details.transport.routeName + (details.transport.isCustomRoute ? ' (custom)' : ''),
-    },
-    { label: 'Vehicle Type', value: details.transport.vehicleTypeName },
-    {
-      label: 'Transport Total',
-      value: details.transport.referencePrice != null
-        ? `SAR ${((details.transport.hasPriceOverride && details.transport.agreedPrice != null ? details.transport.agreedPrice : details.transport.referencePrice) * details.transport.numberOfVehicles).toFixed(2)}`
-        : '',
-    },
-    { label: 'Planned Outbound', value: details.plannedOutboundDate },
-    { label: 'Expected Return', value: details.expectedReturnDate },
-  ];
+  const caseProvenance = buildCaseProvenance({
+    extractedAt: extraction.extractedAt,
+    extractionConfidenceNote: manualEntry
+      ? 'Manual entry — no AI extraction was used for this case'
+      : `Machine-read from the uploaded document${
+          extraction.visaNumber.confidence ? ` · visa number ${extraction.visaNumber.confidence} confidence` : ''
+        }`,
+    verifiedCount,
+    requiredCount: REQUIRED_VERIFICATION_KEYS.length,
+    reviewOfficer,
+    reviewedAt: lastVerifiedAt,
+    matchedPilgrimName: match.pilgrim?.full_name ?? null,
+    matchedPassport: match.pilgrim?.passport_number ?? null,
+    savedAt: savedAt || null,
+  });
 
   return (
-    <div className="max-w-[1280px] mx-auto">
-      {/* Page Header */}
-      <div className="mb-6">
-        <nav className="text-xs text-slate-400 mb-2" aria-label="Breadcrumb">
-          <span>Operations Automation Pro</span>
-          <ChevronRight className="inline h-3 w-3 mx-1" />
-          <span className="text-slate-600 font-medium">Visa & Contract Logger</span>
-        </nav>
-
-        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-          <div>
-            <h1 className="font-display font-bold text-2xl text-navy-900">Visa & Contract Logger</h1>
-            <p className="mt-1 text-sm text-slate-500 max-w-2xl">
-              Extract visa information, match it to an existing pilgrim and securely record confirmed details.
-            </p>
+    <div>
+      <PageHeader
+        eyebrow="Operations"
+        title="Visa &amp; Contract Logger"
+        subtitle="Extract visa information, review every value explicitly, match it to an existing pilgrim, and record the confirmed details."
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700">
+              <span className="h-2 w-2 rounded-full bg-emerald-600" aria-hidden="true" />
+              Database connected
+            </span>
+            <span className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700">
+              AI requests:{' '}
+              <span className="font-bold tabular-nums">
+                {aiRequestsRemaining} of {AI_DAILY_LIMIT}
+              </span>{' '}
+              left
+            </span>
           </div>
+        }
+      />
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 rounded-lg bg-white border border-slate-200 px-3 py-1.5" title="HajjERP Supabase database is connected">
-              <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-xs font-medium text-slate-600">DB Connected</span>
-            </div>
-
-            <div className="flex items-center gap-2 rounded-lg bg-white border border-slate-200 px-3 py-1.5">
-              <div className="flex flex-col">
-                <span className="text-[10px] text-slate-400 font-medium leading-tight">AI Requests</span>
-                <span className="text-xs font-bold text-slate-700 leading-tight">{aiRequestsRemaining} of {AI_DAILY_LIMIT} left</span>
-              </div>
-              <div className="w-16 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                <div className="h-full rounded-full bg-brand-500" style={{ width: `${(aiRequestsUsed / AI_DAILY_LIMIT) * 100}%` }} />
-              </div>
-            </div>
-
-            <div className="hidden sm:flex items-center gap-2 rounded-lg bg-white border border-slate-200 px-3 py-1.5">
-              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-xs font-bold uppercase text-white">
-                {(profile?.full_name || 'U').charAt(0)}
-              </div>
-              <span className="text-xs font-medium text-slate-700">{profile?.full_name || 'Staff'}</span>
-            </div>
-
-            <button onClick={handleViewHistory} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors" title="View processing history">
-              <FileScan className="h-3.5 w-3.5" /> History
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Workflow Stepper */}
-      <div className="mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm px-4 sm:px-6 py-4">
+      <div className="mb-6 rounded-lg border border-slate-300 bg-white px-4 py-3.5">
         <WorkflowStepper currentStep={step} completedSteps={completedSteps} />
       </div>
 
       {alert && (
         <div className="mb-4">
-          <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
+          <Alert tone={alert.tone} onDismiss={() => setAlert(null)}>
+            {alert.message}
+          </Alert>
         </div>
       )}
 
       {showSuccess ? (
-        <SuccessScreen
-          extraction={extraction}
-          details={details}
-          savedBy={profile?.full_name || 'Staff'}
-          savedAt={savedAt}
-          onViewPilgrim={handleViewPilgrim}
-          onProcessAnother={handleProcessAnother}
-          onViewHistory={handleViewHistory}
-        />
+        <div className="space-y-6">
+          <ProvenanceLadder provenance={caseProvenance} orientation="horizontal" />
+          <SuccessScreen
+            extraction={extraction}
+            details={details}
+            savedBy={profile?.full_name || 'Staff'}
+            savedAt={savedAt}
+            onViewPilgrim={handleViewPilgrim}
+            onProcessAnother={handleProcessAnother}
+            onViewHistory={handleViewHistory}
+          />
+        </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left side — main form */}
-          <div className="lg:col-span-2 space-y-6">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="space-y-6 xl:col-span-2">
             {step === 'case_details' && (
-              <CaseDetailsCard
-                details={details}
-                onChange={handleDetailsChange}
-                pilgrimOptions={pilgrimOptions}
-                pilgrimLoading={pilgrimLoading}
-                onPilgrimSearch={handlePilgrimSearch}
-                agentOptions={agentOptions}
-                staffOptions={staffOptions}
-                errors={errors}
-                disabled={false}
-                isAdmin={isAdminOrHigher}
-              />
-            )}
-
-            {step === 'case_details' && (
-              <div className="flex items-center justify-end gap-3">
-                <button onClick={goToUpload} disabled={!caseDetailsValid} className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-                  Continue to Upload <ArrowRight className="h-4 w-4" />
-                </button>
-              </div>
+              <>
+                <CaseDetailsCard
+                  details={details}
+                  onChange={handleDetailsChange}
+                  pilgrimOptions={pilgrimOptions}
+                  pilgrimLoading={pilgrimLoading}
+                  onPilgrimSearch={handlePilgrimSearch}
+                  agentOptions={agentOptions}
+                  staffOptions={staffOptions}
+                  errors={errors}
+                  disabled={false}
+                  isAdmin={isAdminOrHigher}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    onClick={goToUpload}
+                    disabled={!caseDetailsValid}
+                    icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
+                  >
+                    Continue to upload
+                  </Button>
+                </div>
+              </>
             )}
 
             {step === 'upload_visa' && (
               <>
-                <button onClick={goToCaseDetails} className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors">
-                  <ArrowLeft className="h-4 w-4" /> Back to Case Details
-                </button>
+                <Button
+                  variant="ghost"
+                  onClick={goToCaseDetails}
+                  icon={<ArrowLeft className="h-4 w-4" aria-hidden="true" />}
+                >
+                  Back to case details
+                </Button>
 
-                <UploadVisaCard file={file} onFileSelect={(f) => { setFile(f); setUploadError(null); }} disabled={isProcessing} error={uploadError} />
-
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <p className="text-xs text-slate-500">
-                    {isProcessing ? EXTRACTION_STATUS_MESSAGES[extractionStatus] : 'One AI request will be used for this extraction'}
-                  </p>
-                  <button onClick={handleExtract} disabled={!isReady || isProcessing || aiRequestsRemaining <= 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-                    {isProcessing ? (
-                      <><Loader2 className="h-4 w-4 animate-spin" />{EXTRACTION_STATUS_MESSAGES[extractionStatus]}</>
-                    ) : (
-                      <><FileScan className="h-4 w-4" /> Extract Visa Information</>
-                    )}
-                  </button>
-                </div>
+                <UploadVisaCard
+                  file={file}
+                  onFileSelect={(f) => {
+                    setFile(f);
+                    setUploadError(null);
+                  }}
+                  disabled={isProcessing}
+                  error={uploadError}
+                />
 
                 {isProcessing && (
-                  <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5">
-                    <div className="space-y-2.5">
-                      {(['securing', 'uploading', 'extracting', 'matching', 'checking_duplicates', 'preparing_review'] as ExtractionStatus[]).map((s) => {
-                        const isDone = completedSteps.has('upload_visa') || stepsOrder(extractionStatus) > stepsOrder(s);
-                        const isActive = extractionStatus === s;
+                  <Panel title="Processing" description="Each stage runs in order. Do not close this page.">
+                    <ol className="space-y-2.5">
+                      {EXTRACTION_STAGES.map((stage) => {
+                        const order = EXTRACTION_STAGES.indexOf(stage);
+                        const currentOrder = EXTRACTION_STAGES.indexOf(extractionStatus);
+                        const done = currentOrder > order;
+                        const active = extractionStatus === stage;
                         return (
-                          <div key={s} className="flex items-center gap-3">
-                            <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-all ${
-                              isDone ? 'bg-green-500 text-white' : isActive ? 'bg-brand-500 text-white' : 'bg-slate-100 text-slate-400'
-                            }`}>
-                              {isDone ? <CheckCircle2 className="h-3.5 w-3.5" /> : isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="text-xs">•</span>}
-                            </div>
-                            <span className={`text-sm ${isDone ? 'text-slate-700' : isActive ? 'text-brand-700 font-medium' : 'text-slate-400'}`}>
-                              {EXTRACTION_STATUS_MESSAGES[s]}
+                          <li key={stage} className="flex items-center gap-3">
+                            <span
+                              className={cn(
+                                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border',
+                                done && 'border-emerald-700 bg-emerald-700 text-white',
+                                active && 'border-brand-600 bg-brand-600 text-white',
+                                !done && !active && 'border-dashed border-slate-300 text-slate-400',
+                              )}
+                              aria-hidden="true"
+                            >
+                              {done ? (
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              ) : active ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <span className="text-2xs">•</span>
+                              )}
                             </span>
-                          </div>
+                            <span
+                              className={cn(
+                                'text-sm',
+                                done && 'text-slate-700',
+                                active && 'font-semibold text-brand-800',
+                                !done && !active && 'text-slate-400',
+                              )}
+                            >
+                              {EXTRACTION_STATUS_MESSAGES[stage]}
+                              {active && <span className="sr-only"> (in progress)</span>}
+                              {done && <span className="sr-only"> (complete)</span>}
+                            </span>
+                          </li>
                         );
                       })}
-                    </div>
-                  </div>
+                    </ol>
+                  </Panel>
                 )}
+
+                {extractionStatus === 'error' && (
+                  <Alert tone="critical" title="Extraction failed">
+                    The document could not be read. You can retry the extraction, or enter every value by hand
+                    and verify each one against the document.
+                  </Alert>
+                )}
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-slate-600">
+                    {isProcessing
+                      ? EXTRACTION_STATUS_MESSAGES[extractionStatus]
+                      : 'One AI request will be used for this extraction.'}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={startManualEntry}
+                      disabled={isProcessing || !file}
+                      icon={<PenLine className="h-4 w-4" aria-hidden="true" />}
+                    >
+                      Enter details manually
+                    </Button>
+                    <Button
+                      onClick={handleExtract}
+                      loading={isProcessing}
+                      disabled={!isReady || aiRequestsRemaining <= 0}
+                      icon={<FileScan className="h-4 w-4" aria-hidden="true" />}
+                    >
+                      Extract visa information
+                    </Button>
+                  </div>
+                </div>
               </>
             )}
 
             {step === 'review_extraction' && (
               <>
-                <button onClick={() => setStep('upload_visa')} className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors">
-                  <ArrowLeft className="h-4 w-4" /> Back to Upload
-                </button>
+                <Button
+                  variant="ghost"
+                  onClick={() => setStep('upload_visa')}
+                  icon={<ArrowLeft className="h-4 w-4" aria-hidden="true" />}
+                >
+                  Back to upload
+                </Button>
 
-                <ReviewScreen extraction={extraction} match={match} details={details} onExtractionChange={handleExtractionChange} onDetailsChange={handleDetailsChange} />
+                <ReviewScreen
+                  extraction={extraction}
+                  match={match}
+                  details={details}
+                  onFieldEdit={handleFieldEdit}
+                  onFieldVerify={handleFieldVerify}
+                  onFieldUnverify={handleFieldUnverify}
+                  documentPreviewUrl={filePreviewUrl}
+                  documentName={file?.name ?? null}
+                />
 
-                <div className="flex items-center justify-end gap-3">
-                  <button onClick={goToConfirm} className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-all">
-                    Proceed to Confirmation <ArrowRight className="h-4 w-4" />
-                  </button>
+                <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
+                  {!reviewComplete && (
+                    <p className="text-xs text-amber-900 sm:mr-auto">
+                      {REQUIRED_VERIFICATION_KEYS.length - verifiedCount} field
+                      {REQUIRED_VERIFICATION_KEYS.length - verifiedCount === 1 ? '' : 's'} still need explicit
+                      verification.
+                    </p>
+                  )}
+                  <Button
+                    onClick={goToConfirm}
+                    disabled={!reviewComplete}
+                    icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
+                  >
+                    Proceed to confirmation
+                  </Button>
                 </div>
               </>
             )}
 
             {step === 'confirm_save' && !showSuccess && (
               <>
-                <button onClick={backToReview} className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors">
-                  <ArrowLeft className="h-4 w-4" /> Return to Review
-                </button>
+                <Button
+                  variant="ghost"
+                  onClick={backToReview}
+                  icon={<ArrowLeft className="h-4 w-4" aria-hidden="true" />}
+                >
+                  Return to review
+                </Button>
 
-                <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="px-6 py-5 border-b border-slate-100">
-                    <h3 className="font-display font-bold text-lg text-navy-900">Confirmation Summary</h3>
-                    <p className="mt-1 text-sm text-slate-500">Review what will be saved before confirming</p>
-                  </div>
-                  <div className="px-6 py-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-                      {confirmationRows.map((item) => (
-                        <div key={item.label} className="flex items-start gap-2">
-                          {item.label.includes('Transport') || item.label.includes('Vehicle') ? (
-                            <Bus className="h-3.5 w-3.5 text-slate-400 mt-1 shrink-0" />
-                          ) : item.label === 'Agent' ? (
-                            <Building2 className="h-3.5 w-3.5 text-slate-400 mt-1 shrink-0" />
-                          ) : null}
-                          <div className="min-w-0">
-                            <p className="text-xs text-slate-400 font-medium">{item.label}</p>
-                            <p className="text-sm text-slate-800 font-medium">{item.value || '—'}</p>
-                          </div>
+                <Panel
+                  title="Confirmation summary"
+                  description="Exactly what will be written to the pilgrim record."
+                >
+                  <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                    {REQUIRED_VERIFICATION_KEYS.map((key) => {
+                      const field = extraction[key];
+                      const labels: Record<ExtractedFieldKey, string> = {
+                        passengerName: 'Passenger name',
+                        passportNumber: 'Passport number',
+                        visaNumber: 'Visa number',
+                        nationality: 'Nationality',
+                      };
+                      const isIdentifier = key === 'passportNumber' || key === 'visaNumber';
+                      return (
+                        <div key={key} className="min-w-0">
+                          <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                            {labels[key]}
+                          </dt>
+                          <dd className="mt-0.5 text-sm text-slate-900">
+                            {isIdentifier ? (
+                              <Identifier value={field.value} />
+                            ) : (
+                              field.value || <span className="text-slate-400">—</span>
+                            )}
+                          </dd>
+                          <p className="mt-0.5 text-2xs text-slate-500">
+                            Verified by {field.verifiedByName ?? 'an officer'}
+                            {field.verifiedAt ? ` · ${formatDateTime(field.verifiedAt)}` : ''}
+                          </p>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                      );
+                    })}
 
-                <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-3">
-                  <button onClick={backToReview} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all w-full sm:w-auto">
-                    <ArrowLeft className="h-4 w-4" /> Return to Review
-                  </button>
-                  <button onClick={() => setConfirmDialog(true)} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-all disabled:opacity-50 w-full sm:w-auto">
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Confirm and Save Visa Record
-                  </button>
+                    <div className="min-w-0">
+                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Agent</dt>
+                      <dd className="mt-0.5 text-sm text-slate-900">
+                        {details.agentName}
+                        {details.agentIsProposed &&
+                          (isAdminOrHigher ? ' (new — will be created)' : ' (proposed — pending approval)')}
+                      </dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                        Visa company
+                      </dt>
+                      <dd className="mt-0.5 text-sm text-slate-900">{details.visaCompany || '—'}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                        Makkah hotel
+                      </dt>
+                      <dd className="mt-0.5 text-sm text-slate-900">
+                        {details.makkahHotelName || '—'}
+                        {details.makkahHotelIsCustom && ' (custom)'}
+                      </dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                        Madinah hotel
+                      </dt>
+                      <dd className="mt-0.5 text-sm text-slate-900">
+                        {details.madinahHotelName || '—'}
+                        {details.madinahHotelIsCustom && ' (custom)'}
+                      </dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                        Planned outbound
+                      </dt>
+                      <dd className="mt-0.5 text-sm text-slate-900">{details.plannedOutboundDate || '—'}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                        Expected return
+                      </dt>
+                      <dd className="mt-0.5 text-sm text-slate-900">{details.expectedReturnDate || '—'}</dd>
+                    </div>
+                  </dl>
+
+                  <div className="mt-5 border-t border-slate-200 pt-4">
+                    <p className="mb-2 text-2xs font-bold uppercase tracking-wide text-slate-600">
+                      Ground transportation
+                    </p>
+                    <TransportSummary transport={details.transport} />
+                  </div>
+                </Panel>
+
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <Button
+                    variant="secondary"
+                    onClick={backToReview}
+                    icon={<ArrowLeft className="h-4 w-4" aria-hidden="true" />}
+                  >
+                    Return to review
+                  </Button>
+                  <Button
+                    onClick={() => setConfirmDialog(true)}
+                    loading={saving}
+                    disabled={!reviewComplete}
+                    icon={<Save className="h-4 w-4" aria-hidden="true" />}
+                  >
+                    Confirm and save visa record
+                  </Button>
                 </div>
               </>
             )}
           </div>
 
-          {/* Right side — Processing Summary */}
-          <div className="lg:col-span-1">
+          {/* Case state — all four provenance stages are visible simultaneously */}
+          <div className="space-y-6 xl:col-span-1">
+            <Panel
+              title="Case state"
+              description="AI Extracted → Human Reviewed → Matched to HajjERP → Saved. These stages are never collapsed into one another."
+            >
+              <ProvenanceLadder provenance={caseProvenance} />
+            </Panel>
+
             <ProcessingSummary
               details={details}
               file={file}
@@ -876,18 +1079,21 @@ export default function VisaLoggerPage() {
 
       <ConfirmDialog
         open={confirmDialog}
-        title="Confirm and Save Visa Record"
-        message="This will save the reviewed visa information and link it to the selected pilgrim. Journey arrival and departure statuses will not be changed."
-        confirmLabel="Confirm and Save"
-        onConfirm={handleConfirmSave}
-        onCancel={() => setConfirmDialog(false)}
+        title="Confirm and save visa record"
+        confirmLabel="Confirm and save"
         loading={saving}
+        onCancel={() => setConfirmDialog(false)}
+        onConfirm={handleConfirmSave}
+        message={
+          <>
+            This saves the reviewed visa information against{' '}
+            <strong>{details.pilgrimName || 'the selected pilgrim'}</strong>. All{' '}
+            {REQUIRED_VERIFICATION_KEYS.length} extracted fields have been explicitly verified, and the
+            verification trail is recorded in the audit history. Journey arrival and departure statuses are not
+            changed by this action.
+          </>
+        }
       />
     </div>
   );
-}
-
-function stepsOrder(status: ExtractionStatus): number {
-  const order: ExtractionStatus[] = ['idle', 'securing', 'uploading', 'extracting', 'matching', 'checking_duplicates', 'preparing_review', 'complete', 'error'];
-  return order.indexOf(status);
 }

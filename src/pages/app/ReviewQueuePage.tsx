@@ -1,17 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  ArrowLeft,
-  ClipboardList,
-  Loader2,
-  CheckCircle2,
-  XCircle,
   AlertTriangle,
-  Search,
-  RefreshCw,
-  ChevronDown,
-  ChevronRight,
+  ArrowRight,
   Building2,
+  CheckCircle2,
+  ClipboardList,
+  RefreshCw,
+  XCircle,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
@@ -20,6 +15,13 @@ import { friendlyError } from '@/lib/validation';
 import { parseDate } from '@/lib/verifiedImport';
 import type { SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
+import { Alert } from '@/components/ui/Alert';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { EmptyState, LoadingBlock } from '@/components/ui/Feedback';
+import { Field, Identifier, Input, SearchInput, Select } from '@/components/ui/Field';
+import { Panel } from '@/components/ui/Panel';
+import { cn } from '@/lib/utils';
 
 interface ReviewQueueRow {
   id: string;
@@ -46,6 +48,44 @@ interface ReviewQueueRow {
   created_at: string;
 }
 
+/** Every field an officer can approve, paired with the original CSV value it came from. */
+type ApprovedField =
+  | 'full_name'
+  | 'passport_number'
+  | 'visa_number'
+  | 'departure_date'
+  | 'expected_return_date'
+  | 'makkah_hotel'
+  | 'madinah_hotel'
+  | 'transportation'
+  | 'visa_company'
+  | 'arrival_port'
+  | 'contract_record_date';
+
+interface FieldSpec {
+  key: ApprovedField;
+  label: string;
+  required?: boolean;
+  /** Date fields are only carried over when the original parses cleanly. */
+  isDate?: boolean;
+  identifier?: boolean;
+  hint?: string;
+}
+
+const FIELD_SPECS: FieldSpec[] = [
+  { key: 'full_name', label: 'Pilgrim name', required: true },
+  { key: 'passport_number', label: 'Passport number', required: true, identifier: true },
+  { key: 'visa_number', label: 'Visa number', identifier: true },
+  { key: 'departure_date', label: 'Scheduled outbound date', required: true, isDate: true, hint: 'YYYY-MM-DD' },
+  { key: 'expected_return_date', label: 'Expected return date', isDate: true, hint: 'YYYY-MM-DD' },
+  { key: 'contract_record_date', label: 'Contract record date', isDate: true, hint: 'YYYY-MM-DD' },
+  { key: 'visa_company', label: 'Visa company' },
+  { key: 'arrival_port', label: 'Planned arrival port' },
+  { key: 'makkah_hotel', label: 'Makkah hotel' },
+  { key: 'madinah_hotel', label: 'Madinah hotel' },
+  { key: 'transportation', label: 'Ground transportation' },
+];
+
 export default function ReviewQueuePage() {
   const { profile } = useAuth();
   const [rows, setRows] = useState<ReviewQueueRow[]>([]);
@@ -61,16 +101,11 @@ export default function ReviewQueuePage() {
   const loadRows = useCallback(async () => {
     setLoading(true);
     setError(null);
-    let query = supabase
-      .from('import_review_queue')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (statusFilter !== 'all') {
-      query = query.eq('status', statusFilter);
-    }
-    const { data, error: qErr } = await query;
-    if (qErr) {
-      setError(friendlyError(qErr));
+    let query = supabase.from('import_review_queue').select('*').order('created_at', { ascending: false });
+    if (statusFilter !== 'all') query = query.eq('status', statusFilter);
+    const { data, error: queryError } = await query;
+    if (queryError) {
+      setError(friendlyError(queryError));
       setRows([]);
     } else {
       setRows((data ?? []) as ReviewQueueRow[]);
@@ -83,70 +118,72 @@ export default function ReviewQueuePage() {
   }, [loadRows]);
 
   useEffect(() => {
-    supabase.from('sub_agents').select('*').eq('active_status', true).order('organisation_name').then(({ data }) => {
-      if (data) setSubAgents(data as SubAgent[]);
-    });
+    supabase
+      .from('sub_agents')
+      .select('*')
+      .eq('active_status', true)
+      .order('organisation_name')
+      .then(({ data }) => {
+        if (data) setSubAgents(data as SubAgent[]);
+      });
   }, []);
 
   const filtered = rows.filter((r) => {
     if (!search) return true;
-    const s = search.toLowerCase();
+    const q = search.toLowerCase();
     return (
-      r.full_name.toLowerCase().includes(s) ||
-      r.passport_number.toLowerCase().includes(s) ||
-      (r.agent_name ?? '').toLowerCase().includes(s) ||
-      (r.review_reason ?? '').toLowerCase().includes(s)
+      r.full_name.toLowerCase().includes(q) ||
+      r.passport_number.toLowerCase().includes(q) ||
+      (r.agent_name ?? '').toLowerCase().includes(q) ||
+      (r.review_reason ?? '').toLowerCase().includes(q)
     );
   });
 
   const pendingCount = rows.filter((r) => r.status === 'pending').length;
-  const approvedCount = rows.filter((r) => r.status === 'approved').length;
-  const rejectedCount = rows.filter((r) => r.status === 'rejected').length;
 
-  async function approveRow(row: ReviewQueueRow, edits: Record<string, string>) {
+  async function approveRow(row: ReviewQueueRow, approved: Record<string, string>) {
     setActionLoading(row.id);
     setError(null);
 
-    const fullName = edits.full_name?.trim() || row.full_name;
-    const passportNumber = edits.passport_number?.trim() || row.passport_number;
-    const departureDate = parseDate(edits.departure_date || row.departure_date || '');
-    const returnDate = parseDate(edits.expected_return_date || row.expected_return_date || '');
-    const contractDate = parseDate(edits.contract_record_date || row.contract_record_date || '');
+    const fullName = (approved.full_name ?? '').trim();
+    const passportNumber = (approved.passport_number ?? '').trim();
+    const departureDate = parseDate(approved.departure_date ?? '');
+    const returnDate = parseDate(approved.expected_return_date ?? '');
+    const contractDate = parseDate(approved.contract_record_date ?? '');
 
     if (!fullName) {
-      setError('Pilgrim name is required to approve this row.');
+      setError('An approved pilgrim name is required before this row can be imported.');
       setActionLoading(null);
       return;
     }
     if (!passportNumber) {
-      setError('Passport number is required to approve this row.');
+      setError('An approved passport number is required before this row can be imported.');
       setActionLoading(null);
       return;
     }
     if (!departureDate) {
-      setError('A valid departure date is required to approve this row.');
+      setError('A valid approved scheduled outbound date is required before this row can be imported.');
       setActionLoading(null);
       return;
     }
 
-    const subAgentId = edits.sub_agent_id || null;
-
     const insertData: Record<string, unknown> = {
       full_name: fullName,
       passport_number: passportNumber,
+      // Known limitation of the current importer — see deferred issues.
       nationality: 'Nigeria',
-      sub_agent_id: subAgentId,
+      sub_agent_id: approved.sub_agent_id || null,
       expected_departure_date: departureDate,
       actual_departure_date: null,
       expected_return_date: returnDate,
       arrival_date: null,
       operational_notes: null,
-      visa_number: edits.visa_number || row.visa_number || null,
-      makkah_hotel: edits.makkah_hotel || row.makkah_hotel || null,
-      madinah_hotel: edits.madinah_hotel || row.madinah_hotel || null,
-      transportation: edits.transportation || row.transportation || null,
-      visa_company: edits.visa_company || row.visa_company || null,
-      arrival_port: edits.arrival_port || row.arrival_port || null,
+      visa_number: approved.visa_number || null,
+      makkah_hotel: approved.makkah_hotel || null,
+      madinah_hotel: approved.madinah_hotel || null,
+      transportation: approved.transportation || null,
+      visa_company: approved.visa_company || null,
+      arrival_port: approved.arrival_port || null,
       contract_record_date: contractDate,
       source_sheet: row.source_sheet,
       source_row: row.source_row,
@@ -166,7 +203,7 @@ export default function ReviewQueuePage() {
 
     if (insertErr) {
       if (insertErr.message.includes('duplicate') || insertErr.message.includes('unique')) {
-        setError(`A pilgrim with passport ${passportNumber} already exists. Cannot approve this row.`);
+        setError(`A pilgrim with passport ${passportNumber} already exists. This row cannot be approved.`);
       } else {
         setError(friendlyError(insertErr));
       }
@@ -182,8 +219,8 @@ export default function ReviewQueuePage() {
         resolved_by: profile?.id ?? null,
         full_name: fullName,
         passport_number: passportNumber,
-        departure_date: edits.departure_date || row.departure_date,
-        expected_return_date: edits.expected_return_date || row.expected_return_date,
+        departure_date: approved.departure_date || row.departure_date,
+        expected_return_date: approved.expected_return_date || row.expected_return_date,
       })
       .eq('id', row.id);
 
@@ -197,7 +234,7 @@ export default function ReviewQueuePage() {
       performedByName: profile?.full_name ?? '',
     });
 
-    setActionResult(`Approved: ${fullName} imported as active pilgrim.`);
+    setActionResult(`${fullName} approved and imported as an active pilgrim record.`);
     setActionLoading(null);
     setExpandedId(null);
     await loadRows();
@@ -224,103 +261,94 @@ export default function ReviewQueuePage() {
       performedByName: profile?.full_name ?? '',
     });
 
-    setActionResult(`Rejected: ${row.full_name} will not be imported.`);
+    setActionResult(`${row.full_name} rejected. This row will not be imported.`);
     setActionLoading(null);
     await loadRows();
   }
 
   return (
     <div>
-      <Link to="/app/pilgrims" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-        <ArrowLeft className="h-4 w-4" /> Back to Pilgrims
-      </Link>
-
       <PageHeader
+        eyebrow="Pilgrims"
         title="Import Review Queue"
-        subtitle={`${pendingCount} pending, ${approvedCount} approved, ${rejectedCount} rejected`}
-        icon={<ClipboardList className="h-6 w-6" />}
+        subtitle="Rows that an import could not accept without a human decision. Each row shows the original CSV values beside the values you approve."
         actions={
-          <button
+          <Button
+            variant="secondary"
             onClick={loadRows}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+            loading={loading}
+            icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
           >
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </button>
+            Refresh
+          </Button>
         }
       />
 
       {error && (
-        <div className="mb-6 flex items-start gap-3 rounded-xl bg-red-50 border border-red-200 p-5">
-          <AlertTriangle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
+        <Alert tone="critical" className="mb-5" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
       )}
-
       {actionResult && (
-        <div className="mb-6 flex items-start gap-3 rounded-xl bg-emerald-50 border border-emerald-200 p-5">
-          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
-          <p className="text-sm text-emerald-700">{actionResult}</p>
-        </div>
+        <Alert tone="success" className="mb-5" onDismiss={() => setActionResult(null)}>
+          {actionResult}
+        </Alert>
       )}
 
-      {/* Filter bar */}
-      <div className="mb-6 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name, passport, agent, or review reason..."
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-            />
-          </div>
-          <div className="flex gap-2">
-            {(['pending', 'approved', 'rejected', 'all'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setStatusFilter(s)}
-                className={`rounded-xl px-4 py-2.5 text-sm font-medium capitalize transition-all ${
-                  statusFilter === s
-                    ? 'bg-brand-500 text-white shadow-lg shadow-brand-900/20'
-                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+      <div className="mb-5 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white p-3 lg:flex-row lg:items-center">
+        <SearchInput
+          label="Search the review queue"
+          value={search}
+          onValueChange={setSearch}
+          placeholder="Search by name, passport, agent or review reason…"
+          className="flex-1"
+        />
+        <div
+          className="flex flex-wrap gap-1 rounded-md border border-slate-300 p-1"
+          role="group"
+          aria-label="Filter by resolution status"
+        >
+          {(['pending', 'approved', 'rejected', 'all'] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setStatusFilter(value)}
+              aria-pressed={statusFilter === value}
+              className={cn(
+                'h-8 rounded px-3 text-xs font-semibold capitalize transition-colors',
+                statusFilter === value
+                  ? 'bg-brand-600 text-white'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+              )}
+            >
+              {value}
+              {value === 'pending' && pendingCount > 0 ? ` (${pendingCount})` : ''}
+            </button>
+          ))}
         </div>
       </div>
 
       {loading ? (
-        <div className="rounded-2xl border border-slate-100 bg-white p-12 text-center">
-          <Loader2 className="h-6 w-6 animate-spin mx-auto text-slate-400" />
-          <p className="mt-3 text-sm text-slate-500">Loading review queue...</p>
-        </div>
+        <LoadingBlock label="Loading the review queue…" />
       ) : filtered.length === 0 ? (
-        <div className="rounded-2xl border border-slate-100 bg-white p-12 text-center">
-          <ClipboardList className="h-10 w-10 text-slate-300 mx-auto" />
-          <p className="mt-3 text-sm text-slate-500">
-            {statusFilter === 'pending' ? 'No pending review rows.' : `No ${statusFilter} rows.`}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            Review rows appear here after a verified import that contained REVIEW-status CSV rows.
-          </p>
-        </div>
+        <EmptyState
+          icon={<ClipboardList className="h-5 w-5" aria-hidden="true" />}
+          tone={statusFilter === 'pending' ? 'positive' : 'neutral'}
+          title={statusFilter === 'pending' ? 'Nothing is waiting for review' : `No ${statusFilter} rows`}
+          description="Rows arrive here when an import cannot accept them without a human decision — for example an invalid date, a missing name, or an ambiguous agent."
+        />
       ) : (
         <div className="space-y-3">
           {filtered.map((row) => (
-            <ReviewRowCard
+            <ReviewRow
               key={row.id}
               row={row}
               subAgents={subAgents}
               expanded={expandedId === row.id}
               onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
-              onApprove={(edits) => approveRow(row, edits)}
+              onApprove={(approved) => approveRow(row, approved)}
               onReject={() => rejectRow(row)}
-              actionLoading={actionLoading === row.id}
+              busy={actionLoading === row.id}
             />
           ))}
         </div>
@@ -329,204 +357,262 @@ export default function ReviewQueuePage() {
   );
 }
 
-function ReviewRowCard({
+function ReviewRow({
   row,
   subAgents,
   expanded,
   onToggle,
   onApprove,
   onReject,
-  actionLoading,
+  busy,
 }: {
   row: ReviewQueueRow;
   subAgents: SubAgent[];
   expanded: boolean;
   onToggle: () => void;
-  onApprove: (edits: Record<string, string>) => void;
+  onApprove: (approved: Record<string, string>) => void;
   onReject: () => void;
-  actionLoading: boolean;
+  busy: boolean;
 }) {
-  const statusConfig = {
-    pending: { icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-200', label: 'Pending' },
-    approved: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', label: 'Approved' },
-    rejected: { icon: XCircle, color: 'text-slate-500', bg: 'bg-slate-50', border: 'border-slate-200', label: 'Rejected' },
-  };
-  const cfg = statusConfig[row.status];
-  const Icon = cfg.icon;
+  const statusBadge =
+    row.status === 'pending' ? (
+      <Badge tone="caution" icon={<AlertTriangle className="h-3 w-3" aria-hidden="true" />}>
+        Pending review
+      </Badge>
+    ) : row.status === 'approved' ? (
+      <Badge tone="positive" treatment="solid" icon={<CheckCircle2 className="h-3 w-3" aria-hidden="true" />}>
+        Approved
+      </Badge>
+    ) : (
+      <Badge tone="neutral" icon={<XCircle className="h-3 w-3" aria-hidden="true" />}>
+        Rejected
+      </Badge>
+    );
 
   return (
-    <div className={`rounded-2xl border ${cfg.border} bg-white shadow-sm overflow-hidden`}>
-      {/* Header row */}
-      <div className="flex items-start gap-3 p-4">
-        <button
-          onClick={onToggle}
-          className="mt-0.5 shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
-          disabled={row.status !== 'pending'}
-        >
-          {expanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
+    <div
+      className={cn(
+        'overflow-hidden rounded-lg border bg-white',
+        row.status === 'pending' ? 'border-amber-400' : 'border-slate-300',
+      )}
+    >
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-slate-900">
-              {row.full_name || <span className="text-red-600 italic">(missing name)</span>}
+              {row.full_name || <span className="italic text-red-700">(name missing)</span>}
             </p>
-            <span className="text-xs font-mono text-slate-500 rounded bg-slate-100 px-1.5 py-0.5">
-              {row.passport_number}
-            </span>
-            {row.visa_number && (
-              <span className="text-xs font-mono text-slate-400">Visa: {row.visa_number}</span>
-            )}
+            <Identifier value={row.passport_number} />
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-            <Building2 className="h-3.5 w-3.5" />
-            {row.agent_name || 'No agent'}
-            {row.source_sheet && <span>· Sheet: {row.source_sheet}</span>}
-            {row.source_row && <span>· Row: {row.source_row}</span>}
-          </div>
-          <p className="mt-1.5 text-sm text-orange-700 bg-orange-50/60 rounded-lg px-3 py-1.5 inline-block">
-            {row.review_reason || 'No review reason provided'}
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+            <Building2 className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+            {row.agent_name || 'No agent on the row'}
+            {row.source_sheet && <span>· Source: {row.source_sheet}</span>}
+            {row.source_row != null && <span>· Row {row.source_row}</span>}
+          </p>
+          <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-900">
+            {row.review_reason || 'No review reason was recorded for this row.'}
           </p>
         </div>
-        <div className={`flex items-center gap-1.5 shrink-0 ${cfg.color}`}>
-          <Icon className="h-4 w-4" />
-          <span className="text-xs font-semibold hidden sm:inline">{cfg.label}</span>
+        <div className="flex shrink-0 items-center gap-2">
+          {statusBadge}
+          {row.status === 'pending' && (
+            <Button size="sm" variant="secondary" onClick={onToggle} aria-expanded={expanded}>
+              {expanded ? 'Close' : 'Resolve'}
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Expanded edit panel */}
       {expanded && row.status === 'pending' && (
-        <ExpandedEditor
-          row={row}
-          subAgents={subAgents}
-          onApprove={onApprove}
-          onReject={onReject}
-          actionLoading={actionLoading}
-        />
+        <ResolutionEditor row={row} subAgents={subAgents} onApprove={onApprove} onReject={onReject} busy={busy} />
       )}
     </div>
   );
 }
 
-function ExpandedEditor({
+/**
+ * Original-versus-approved comparison.
+ *
+ * Left: the original CSV values, read-only and quoted so their exact content is
+ * unambiguous. Right: the values the officer approves.
+ *
+ * Rule — leave empty rather than guess: where the original cannot be used (an
+ * unparseable date, a missing name) the approved field starts empty. The system
+ * never invents a plausible value on the officer's behalf.
+ */
+function ResolutionEditor({
   row,
   subAgents,
   onApprove,
   onReject,
-  actionLoading,
+  busy,
 }: {
   row: ReviewQueueRow;
   subAgents: SubAgent[];
-  onApprove: (edits: Record<string, string>) => void;
+  onApprove: (approved: Record<string, string>) => void;
   onReject: () => void;
-  actionLoading: boolean;
+  busy: boolean;
 }) {
-  const [edits, setEdits] = useState<Record<string, string>>({});
-
-  const set = (key: string, value: string) => {
-    setEdits((prev) => ({ ...prev, [key]: value }));
+  const originals: Record<ApprovedField, string | null> = {
+    full_name: row.full_name,
+    passport_number: row.passport_number,
+    visa_number: row.visa_number,
+    departure_date: row.original_departure_value ?? row.departure_date,
+    expected_return_date: row.original_return_value ?? row.expected_return_date,
+    contract_record_date: row.contract_record_date,
+    visa_company: row.visa_company,
+    arrival_port: row.arrival_port,
+    makkah_hotel: row.makkah_hotel,
+    madinah_hotel: row.madinah_hotel,
+    transportation: row.transportation,
   };
 
-  const getValue = (key: keyof ReviewQueueRow): string => {
-    const editVal = edits[key];
-    if (editVal !== undefined) return editVal;
-    const dbVal = row[key];
-    return dbVal ?? '';
-  };
+  const [approved, setApproved] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const spec of FIELD_SPECS) {
+      const original = originals[spec.key];
+      if (!original) {
+        initial[spec.key] = '';
+        continue;
+      }
+      if (spec.isDate) {
+        // Carried over only when it parses cleanly. Otherwise: empty, not guessed.
+        initial[spec.key] = parseDate(original) ?? '';
+      } else {
+        initial[spec.key] = original;
+      }
+    }
+    initial.sub_agent_id = '';
+    return initial;
+  });
+
+  const set = (key: string, value: string) => setApproved((prev) => ({ ...prev, [key]: value }));
 
   return (
-    <div className="border-t border-slate-100 p-5 bg-slate-50/40">
-      <p className="text-sm font-semibold text-slate-700 mb-4">
-        Correct the fields below, then approve to import this pilgrim as an active record.
-      </p>
+    <div className="border-t border-slate-200 bg-slate-50 p-4 sm:p-5">
+      <Panel
+        title="Original CSV values"
+        description="Exactly as they appeared in the source file. These are read-only."
+        className="mb-5"
+      >
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+          {FIELD_SPECS.map((spec) => (
+            <div key={spec.key} className="min-w-0">
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">{spec.label}</dt>
+              <dd className="mt-0.5 text-sm">
+                {originals[spec.key] ? (
+                  /* Quoted, and monospace where the value is an identifier or a raw date string */
+                  <span
+                    className={cn(
+                      'break-all text-slate-800',
+                      (spec.identifier || spec.isDate) && 'identifier text-[0.8125rem]',
+                    )}
+                  >
+                    &ldquo;{originals[spec.key]}&rdquo;
+                  </span>
+                ) : (
+                  <span className="text-slate-400">Not present in the file</span>
+                )}
+              </dd>
+            </div>
+          ))}
+          <div className="min-w-0">
+            <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Agent match key</dt>
+            <dd className="mt-0.5 text-sm">
+              {row.agent_match_key ? (
+                <span className="identifier break-all text-[0.8125rem] text-slate-800">
+                  &ldquo;{row.agent_match_key}&rdquo;
+                </span>
+              ) : (
+                <span className="text-slate-400">Not present in the file</span>
+              )}
+            </dd>
+          </div>
+        </dl>
+      </Panel>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Pilgrim Name" value={getValue('full_name')} onChange={(v) => set('full_name', v)} required />
-        <Field label="Passport Number" value={getValue('passport_number')} onChange={(v) => set('passport_number', v)} required />
-        <Field label="Visa Number" value={getValue('visa_number')} onChange={(v) => set('visa_number', v)} />
-        <div>
-          <label className="block text-xs font-semibold text-slate-500 mb-1.5">Assign to Agent</label>
-          <select
-            value={edits.sub_agent_id ?? ''}
-            onChange={(e) => set('sub_agent_id', e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
+      <div className="mb-4 flex items-center gap-2 text-slate-400" aria-hidden="true">
+        <span className="h-px flex-1 bg-slate-300" />
+        <ArrowRight className="h-4 w-4" />
+        <span className="h-px flex-1 bg-slate-300" />
+      </div>
+
+      <Panel
+        title="Approved system values"
+        description="What will be written to the pilgrim record. Where the original could not be used, the field is left empty — complete it yourself rather than guessing."
+        edge="confirmed"
+      >
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {FIELD_SPECS.map((spec) => {
+            const original = originals[spec.key];
+            const emptiedBecauseUnusable = Boolean(spec.isDate && original && !parseDate(original));
+            return (
+              <Field
+                key={spec.key}
+                label={spec.label}
+                htmlFor={`approved-${row.id}-${spec.key}`}
+                required={spec.required}
+                hint={
+                  emptiedBecauseUnusable
+                    ? `The original value could not be read as a date. Enter the correct date (${spec.hint}).`
+                    : spec.hint
+                }
+              >
+                <Input
+                  id={`approved-${row.id}-${spec.key}`}
+                  value={approved[spec.key] ?? ''}
+                  onChange={(e) => set(spec.key, e.target.value)}
+                  identifier={spec.identifier}
+                  invalid={spec.required && !(approved[spec.key] ?? '').trim()}
+                  placeholder={spec.isDate ? 'YYYY-MM-DD' : ''}
+                />
+              </Field>
+            );
+          })}
+
+          <Field
+            label="Assigned sub-agent"
+            htmlFor={`approved-${row.id}-agent`}
+            hint="Leave unassigned rather than guessing which organisation is responsible."
           >
-            <option value="">— Select agent —</option>
-            {subAgents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.organisation_name}
-              </option>
-            ))}
-          </select>
+            <Select
+              id={`approved-${row.id}-agent`}
+              value={approved.sub_agent_id ?? ''}
+              onChange={(e) => set('sub_agent_id', e.target.value)}
+            >
+              <option value="">Leave unassigned</option>
+              {subAgents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.organisation_name}
+                </option>
+              ))}
+            </Select>
+          </Field>
         </div>
-        <Field label="Departure Date" value={getValue('departure_date')} onChange={(v) => set('departure_date', v)} placeholder="YYYY-MM-DD" required />
-        <Field label="Expected Return Date" value={getValue('expected_return_date')} onChange={(v) => set('expected_return_date', v)} placeholder="YYYY-MM-DD" />
-        <Field label="Makkah Hotel" value={getValue('makkah_hotel')} onChange={(v) => set('makkah_hotel', v)} />
-        <Field label="Madinah Hotel" value={getValue('madinah_hotel')} onChange={(v) => set('madinah_hotel', v)} />
-        <Field label="Transportation" value={getValue('transportation')} onChange={(v) => set('transportation', v)} />
-        <Field label="Visa Company" value={getValue('visa_company')} onChange={(v) => set('visa_company', v)} />
-        <Field label="Arrival Port" value={getValue('arrival_port')} onChange={(v) => set('arrival_port', v)} />
-        <Field label="Contract Record Date" value={getValue('contract_record_date')} onChange={(v) => set('contract_record_date', v)} placeholder="YYYY-MM-DD" />
-      </div>
+      </Panel>
 
-      {/* Original values reference */}
-      <div className="mt-4 rounded-lg bg-white border border-slate-100 p-3">
-        <p className="text-xs font-semibold text-slate-400 mb-2">Original CSV Values (read-only reference)</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-slate-500">
-          <div><span className="text-slate-400">Original Departure:</span> {row.original_departure_value || '—'}</div>
-          <div><span className="text-slate-400">Original Return:</span> {row.original_return_value || '—'}</div>
-          <div><span className="text-slate-400">Agent Match Key:</span> {row.agent_match_key || '—'}</div>
-          <div><span className="text-slate-400">Source Row:</span> {row.source_row ?? '—'}</div>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="mt-5 flex items-center gap-3">
-        <button
-          onClick={() => onApprove(edits)}
-          disabled={actionLoading}
-          className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/20 hover:bg-emerald-600 transition-all active:scale-95 disabled:opacity-40"
+      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Button
+          variant="confirm"
+          onClick={() => onApprove(approved)}
+          loading={busy}
+          icon={<CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
         >
-          {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-          Approve & Import
-        </button>
-        <button
+          Approve &amp; import this pilgrim
+        </Button>
+        <Button
+          variant="secondary"
           onClick={onReject}
-          disabled={actionLoading}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all disabled:opacity-40"
+          disabled={busy}
+          icon={<XCircle className="h-4 w-4" aria-hidden="true" />}
         >
-          <XCircle className="h-4 w-4" />
-          Reject
-        </button>
+          Reject this row
+        </Button>
+        <p className="text-xs text-slate-500 sm:ml-2">
+          Approving creates an active pilgrim record with planned travel only.
+        </p>
       </div>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  required,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  required?: boolean;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-        {label} {required && <span className="text-red-500">*</span>}
-      </label>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-      />
     </div>
   );
 }

@@ -88,8 +88,8 @@ export function ProcessingSummary({
   const transportTotal = effectivePrice != null ? `SAR ${(effectivePrice * transport.numberOfVehicles).toFixed(0)}` : '';
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-6">
-      <div className="px-5 py-4 border-b border-slate-100">
+    <div className="rounded-lg border border-slate-300 bg-white lg:sticky lg:top-6">
+      <div className="px-5 py-4 border-b border-slate-200">
         <h3 className="font-display font-bold text-base text-navy-900">Processing Summary</h3>
         <p className="mt-0.5 text-xs text-slate-500">Current case overview</p>
       </div>
@@ -145,7 +145,7 @@ export function ProcessingSummary({
         <Row icon={Upload} label="Uploaded File" value={file?.name || ''} isSet={!!file} />
 
         {/* AI Usage */}
-        <div className="mt-3 pt-3 border-t border-slate-100">
+        <div className="mt-3 pt-3 border-t border-slate-200">
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">
               <Sparkles className="h-3.5 w-3.5 text-brand-500" />
@@ -158,8 +158,8 @@ export function ProcessingSummary({
           <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
             <div
               className={cn(
-                'h-full rounded-full transition-all',
-                usagePercent > 80 ? 'bg-amber-500' : 'bg-brand-500',
+                'h-full rounded-full transition-colors',
+                usagePercent > 80 ? 'bg-amber-500' : 'bg-brand-600',
               )}
               style={{ width: `${usagePercent}%` }}
             />
@@ -168,13 +168,13 @@ export function ProcessingSummary({
       </div>
 
       {/* Ready indicator */}
-      <div className="px-5 py-4 border-t border-slate-100">
+      <div className="px-5 py-4 border-t border-slate-200">
         {currentStep === 'confirm_save' || currentStep === 'review_extraction' ? (
-          <div className="flex items-center gap-2 text-sm font-medium text-green-700">
+          <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
             <CheckCircle2 className="h-4 w-4" /> Ready for confirmation
           </div>
         ) : isReady ? (
-          <div className="flex items-center gap-2 text-sm font-medium text-green-700">
+          <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
             <CheckCircle2 className="h-4 w-4" /> Ready for extraction
           </div>
         ) : (

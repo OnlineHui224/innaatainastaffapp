@@ -1,50 +1,52 @@
-import { useState, useEffect } from 'react';
-import { ShieldCheck, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { logAudit } from '@/lib/audit';
+import { Button } from '@/components/ui/Button';
 
 /**
- * One-time admin bootstrap.
- * Shows a banner when the current user is NOT an admin AND no admin exists yet.
- * Once an admin exists, bootstrap is permanently disabled.
+ * One-time platform-owner bootstrap.
+ * Shows only while no Platform Owner exists. Once one exists, bootstrap is
+ * permanently disabled — the banner never returns.
  */
 export function BootstrapBanner() {
   const { profile, refreshProfile } = useAuth();
   const [checking, setChecking] = useState(true);
-  const [adminExists, setAdminExists] = useState(false);
+  const [ownerExists, setOwnerExists] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    checkAdminExists();
-  }, []);
-
-  async function checkAdminExists() {
-    setChecking(true);
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('role', 'platform_owner')
-        .limit(1);
-      if (error) throw error;
-      setAdminExists((data || []).length > 0);
-    } catch (e) {
-      console.error('Failed to check admin status:', e);
-    } finally {
-      setChecking(false);
+    let active = true;
+    async function checkOwnerExists() {
+      try {
+        const { data, error: queryError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('role', 'platform_owner')
+          .limit(1);
+        if (queryError) throw queryError;
+        if (active) setOwnerExists((data || []).length > 0);
+      } catch (e) {
+        console.error('Failed to check platform owner status:', e);
+      } finally {
+        if (active) setChecking(false);
+      }
     }
-  }
+    checkOwnerExists();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleBootstrap() {
     setBootstrapping(true);
     setError(null);
     try {
-      // Call the secure RPC function
-      const { data, error } = await supabase.rpc('bootstrap_first_admin');
-      if (error) throw error;
+      const { data, error: rpcError } = await supabase.rpc('bootstrap_first_admin');
+      if (rpcError) throw rpcError;
       const result = data as { success: boolean; message: string };
       if (!result.success) {
         setError(result.message);
@@ -69,39 +71,36 @@ export function BootstrapBanner() {
     }
   }
 
-  if (checking) return null;
-  if (adminExists) return null;
+  if (checking || ownerExists || done) return null;
   if (profile?.role === 'platform_owner') return null;
-  if (done) return null;
 
   return (
-    <div className="mb-6 rounded-2xl border-2 border-gold-300 bg-gradient-to-r from-gold-50 to-amber-50 p-6 animate-fade-in">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gold-500 text-white">
-            <Sparkles className="h-6 w-6" />
-          </div>
-          <div>
-            <h3 className="font-display font-bold text-base text-gold-900">Initial Administrator Setup</h3>
-            <p className="mt-1 text-sm text-gold-800/80 max-w-xl">
-              No administrator has been designated yet. As the project owner, you can set yourself as the initial Administrator. This one-time setup is permanently disabled once an Administrator exists.
-            </p>
-            {error && (
-              <p className="mt-2 text-sm text-red-700 flex items-center gap-1">
-                <AlertCircle className="h-4 w-4" /> {error}
-              </p>
-            )}
-          </div>
+    <section
+      aria-labelledby="bootstrap-heading"
+      className="mb-6 overflow-hidden rounded-lg border border-slate-300 bg-white"
+    >
+      {/* Gold rule — deliberate, reserved for platform-ownership level actions */}
+      <div className="h-1 bg-gold-500" aria-hidden="true" />
+      <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h2 id="bootstrap-heading" className="font-display text-sm font-bold uppercase tracking-wide text-navy-900">
+            Initial platform owner setup
+          </h2>
+          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-600">
+            No Platform Owner has been designated yet. You can claim the role once. This one-time setup is
+            permanently disabled as soon as a Platform Owner exists.
+          </p>
+          {error && <p className="mt-2 text-sm font-medium text-red-700">{error}</p>}
         </div>
-        <button
+        <Button
           onClick={handleBootstrap}
-          disabled={bootstrapping}
-          className="inline-flex items-center gap-2 rounded-xl bg-gold-600 px-5 py-3 text-sm font-semibold text-white shadow-lg hover:bg-gold-700 transition-all active:scale-95 disabled:opacity-50 shrink-0"
+          loading={bootstrapping}
+          icon={<ShieldCheck className="h-4 w-4" aria-hidden="true" />}
+          className="shrink-0"
         >
-          {bootstrapping ? <Loader2 className="h-5 w-5 animate-spin" /> : <ShieldCheck className="h-5 w-5" />}
-          Become Administrator
-        </button>
+          Become Platform Owner
+        </Button>
       </div>
-    </div>
+    </section>
   );
 }

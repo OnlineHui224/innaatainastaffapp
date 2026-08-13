@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { supabase } from '@/lib/supabase';
 import {
   Search, MapPin, Calendar, Building2, User, Hotel,
   Package, Plus, AlertCircle, Loader2, Bus, Calculator,
@@ -37,7 +38,7 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
   );
 }
 
-const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition-all disabled:bg-slate-50 disabled:opacity-50';
+const inputClass = 'w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-600  transition-colors disabled:bg-slate-50 disabled:opacity-50';
 
 export function CaseDetailsCard({
   details,
@@ -301,8 +302,8 @@ export function CaseDetailsCard({
     : details.transport.referencePrice;
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="px-6 py-5 border-b border-slate-100">
+    <div className="rounded-lg border border-slate-300 bg-white">
+      <div className="px-6 py-5 border-b border-slate-200">
         <h3 className="font-display font-bold text-lg text-navy-900">Visa Case Details</h3>
         <p className="mt-1 text-sm text-slate-500">
           Select the operational information connected to this visa document.
@@ -363,7 +364,7 @@ export function CaseDetailsCard({
                   </button>
                 </>
               ) : (
-                <div className="space-y-3 rounded-xl border border-brand-200 bg-brand-50/40 p-4">
+                <div className="space-y-3 rounded-md border border-brand-200 bg-brand-50/40 p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-brand-700">New Agent Entry</span>
                     <button
@@ -424,7 +425,7 @@ export function CaseDetailsCard({
                     </div>
                   )}
                   {!agentChecking && details.newAgent?.organisationName && agentDuplicates.length === 0 && (
-                    <div className="flex items-center gap-1.5 text-xs text-green-600">
+                    <div className="flex items-center gap-1.5 text-xs text-emerald-700">
                       <ShieldAlert className="h-3.5 w-3.5" /> No duplicates found — safe to proceed.
                     </div>
                   )}
@@ -502,7 +503,7 @@ export function CaseDetailsCard({
 
               {/* Reference price + override */}
               <div className="md:col-span-2">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-xl bg-slate-50 border border-slate-100 p-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md bg-slate-50 border border-slate-200 p-4">
                   <div>
                     <p className="text-xs text-slate-400 font-medium mb-0.5">Reference Price</p>
                     <div className="flex items-center gap-1.5">
@@ -524,7 +525,7 @@ export function CaseDetailsCard({
                       value={details.transport.numberOfVehicles}
                       onChange={handleNumVehiclesChange}
                       disabled={disabled}
-                      className="w-20 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition-all disabled:bg-slate-50"
+                      className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-brand-600 transition-colors disabled:bg-slate-50"
                     />
                   </div>
                   <div>
@@ -555,7 +556,7 @@ export function CaseDetailsCard({
                     Override reference rate for this booking
                   </label>
                   {details.transport.hasPriceOverride && (
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md border border-amber-200 bg-amber-50/40 p-3">
                       <div>
                         <FieldLabel required>New Agreed Price (SAR)</FieldLabel>
                         <input type="number" min={0} step="0.01" value={details.transport.agreedPrice ?? ''} onChange={(e) => updateTransport({ agreedPrice: parseFloat(e.target.value) || 0 })} disabled={disabled} className={inputClass} />
@@ -621,7 +622,7 @@ export function CaseDetailsCard({
               </div>
             </div>
           ) : (
-            <div className="space-y-3 rounded-xl border border-brand-200 bg-brand-50/40 p-4">
+            <div className="space-y-3 rounded-md border border-brand-200 bg-brand-50/40 p-4">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-brand-700">Custom Route (CUSTOM_ROUTE)</span>
                 <button type="button" onClick={() => { setShowCustomRoute(false); updateTransport({ isCustomRoute: false, customOrigin: '', customDestination: '', routeName: '' }); }} className="text-xs text-slate-500 hover:text-slate-700">Cancel</button>
@@ -687,7 +688,7 @@ export function CaseDetailsCard({
                   </button>
                 </>
               ) : (
-                <div className="space-y-2 rounded-xl border border-brand-200 bg-brand-50/40 p-3">
+                <div className="space-y-2 rounded-md border border-brand-200 bg-brand-50/40 p-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-brand-700">Manual Hotel (CUSTOM_ITINERARY_HOTEL)</span>
                     <button type="button" onClick={() => { setShowCustomMakkah(false); onChange({ makkahHotelIsCustom: false, makkahCustomHotel: null, makkahHotelName: '' }); }} className="text-xs text-slate-500 hover:text-slate-700">Cancel</button>
@@ -738,7 +739,7 @@ export function CaseDetailsCard({
                   </button>
                 </>
               ) : (
-                <div className="space-y-2 rounded-xl border border-brand-200 bg-brand-50/40 p-3">
+                <div className="space-y-2 rounded-md border border-brand-200 bg-brand-50/40 p-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-brand-700">Manual Hotel (CUSTOM_ITINERARY_HOTEL)</span>
                     <button type="button" onClick={() => { setShowCustomMadinah(false); onChange({ madinahHotelIsCustom: false, madinahCustomHotel: null, madinahHotelName: '' }); }} className="text-xs text-slate-500 hover:text-slate-700">Cancel</button>

@@ -1,33 +1,30 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Pencil,
-  Building2,
-  Mail,
-  Phone,
-  MapPin,
-  User,
-  Users,
-  AlertTriangle,
-  CalendarClock,
-  MapPin as LocationIcon,
-  Loader2,
-  StickyNote,
-} from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, Pencil, StickyNote, Users } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 import {
   calculateJourneyStatus,
-  STATUS_META,
-  isOverdue,
   isDepartingIn3Days,
+  isOverdue,
   isPhysicallyPresent,
 } from '@/lib/status';
-import type { SubAgent, Pilgrim } from '@/types';
+import { formatDate } from '@/lib/priority';
+import type { Pilgrim, SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
+import { Alert } from '@/components/ui/Alert';
+import { Badge, StatusBadge } from '@/components/ui/Badge';
+import { ButtonLink } from '@/components/ui/Button';
+import { EmptyState, LoadingBlock } from '@/components/ui/Feedback';
+import { Identifier } from '@/components/ui/Field';
+import { DataGrid, DataRow, Panel } from '@/components/ui/Panel';
+import { RecordCard, TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
+import { PopulationBreakdown, type AgentPopulation } from '@/components/subagents/PopulationBreakdown';
+import { isPlaceholderContact } from '@/lib/subAgents';
 
 export default function SubAgentDetailsPage() {
   const { id } = useParams();
+  const { canEditPilgrims } = useAuth();
   const [subAgent, setSubAgent] = useState<SubAgent | null>(null);
   const [pilgrims, setPilgrims] = useState<Pilgrim[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,15 +33,23 @@ export default function SubAgentDetailsPage() {
   const fetchData = useCallback(async () => {
     if (!id) return;
     setLoading(true);
-    const { data, error } = await supabase.from('sub_agents').select('*').eq('id', id).maybeSingle();
-    if (error || !data) {
-      setError('Sub-agent not found.');
+    const { data, error: queryError } = await supabase
+      .from('sub_agents')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (queryError || !data) {
+      setError('This sub-agent could not be found.');
       setLoading(false);
       return;
     }
     setSubAgent(data as SubAgent);
-    const { data: pData } = await supabase.from('pilgrims').select('*').eq('sub_agent_id', id).order('full_name');
-    setPilgrims((pData || []) as Pilgrim[]);
+    const { data: pilgrimData } = await supabase
+      .from('pilgrims')
+      .select('*')
+      .eq('sub_agent_id', id)
+      .order('full_name');
+    setPilgrims((pilgrimData || []) as Pilgrim[]);
     setLoading(false);
   }, [id]);
 
@@ -52,162 +57,307 @@ export default function SubAgentDetailsPage() {
     fetchData();
   }, [fetchData]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
-      </div>
-    );
-  }
+  if (loading) return <LoadingBlock label="Loading sub-agent record…" />;
 
   if (error || !subAgent) {
     return (
-      <div className="rounded-2xl border border-red-200 bg-red-50 p-8 text-center">
-        <p className="text-sm text-red-700">{error || 'Sub-agent not found.'}</p>
-        <Link to="/app/sub-agents" className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-brand-600">
-          <ArrowLeft className="h-4 w-4" /> Back to sub-agents
-        </Link>
+      <div>
+        <Alert tone="critical" title="Record unavailable">
+          {error || 'This sub-agent could not be found.'}
+        </Alert>
+        <ButtonLink
+          to="/app/sub-agents"
+          variant="secondary"
+          className="mt-4"
+          icon={<ArrowLeft className="h-4 w-4" aria-hidden="true" />}
+        >
+          Back to sub-agents
+        </ButtonLink>
       </div>
     );
   }
 
-  const inSaudi = pilgrims.filter(isPhysicallyPresent).length;
-  const departing = pilgrims.filter(isDepartingIn3Days).length;
-  const overdue = pilgrims.filter(isOverdue).length;
+  const population: AgentPopulation = {
+    assigned: pilgrims.length,
+    inSaudi: pilgrims.filter(isPhysicallyPresent).length,
+    departingSoon: pilgrims.filter(isDepartingIn3Days).length,
+    overdue: pilgrims.filter(isOverdue).length,
+  };
 
-  const stats = [
-    { icon: Users, label: 'Assigned Pilgrims', value: pilgrims.length, color: 'text-slate-600 bg-slate-50' },
-    { icon: LocationIcon, label: 'In Saudi Arabia', value: inSaudi, color: 'text-emerald-600 bg-emerald-50' },
-    { icon: CalendarClock, label: 'Departing Soon', value: departing, color: 'text-amber-600 bg-amber-50' },
-    { icon: AlertTriangle, label: 'Overdue', value: overdue, color: 'text-red-600 bg-red-50' },
-  ];
+  const contactIsPlaceholder = isPlaceholderContact(subAgent.contact_person);
+  const filterBase = `/app/pilgrims?subAgent=${subAgent.id}`;
 
   return (
     <div>
-      <Link to="/app/sub-agents" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-        <ArrowLeft className="h-4 w-4" /> Back to sub-agents
-      </Link>
-
       <PageHeader
+        eyebrow="Sub-agent record"
         title={subAgent.organisation_name}
-        subtitle={subAgent.contact_person}
-        icon={<Building2 className="h-6 w-6" />}
+        subtitle={
+          contactIsPlaceholder
+            ? 'Contact details for this organisation have not been provided yet.'
+            : subAgent.contact_person
+        }
         actions={
-          <Link to={`/app/sub-agents/${id}/edit`} className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-600 transition-all">
-            <Pencil className="h-4 w-4" /> Edit
-          </Link>
+          canEditPilgrims ? (
+            <ButtonLink
+              to={`/app/sub-agents/${id}/edit`}
+              variant="secondary"
+              icon={<Pencil className="h-4 w-4" aria-hidden="true" />}
+            >
+              Edit sub-agent
+            </ButtonLink>
+          ) : undefined
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 space-y-6">
-          {/* Details card */}
-          <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-            <h3 className="font-display font-bold text-base text-slate-900 mb-4">Contact Details</h3>
-            <div className="space-y-4">
-              <DetailRow icon={User} label="Contact Person" value={subAgent.contact_person} />
-              <DetailRow icon={MapPin} label="Country" value={subAgent.country} />
-              <DetailRow icon={Mail} label="Email" value={subAgent.email || '—'} />
-              <DetailRow icon={Phone} label="Phone" value={subAgent.phone_number || '—'} />
-              <div className="flex items-center gap-2">
-                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${subAgent.active_status ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                  {subAgent.active_status ? 'Active' : 'Inactive'}
-                </span>
-              </div>
+      {contactIsPlaceholder && (
+        <Alert tone="warning" title="Contact information is incomplete" className="mb-5">
+          This organisation was created automatically during an import, and its contact person is still the
+          placeholder value <span className="identifier">&ldquo;To be updated&rdquo;</span>. Treat it as
+          unverified until a real contact is recorded.
+          {canEditPilgrims && (
+            <span className="mt-2 block">
+              <Link to={`/app/sub-agents/${id}/edit`} className="font-semibold underline">
+                Complete the contact details
+              </Link>
+            </span>
+          )}
+        </Alert>
+      )}
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="space-y-6">
+          <Panel title="Organisation">
+            <DataGrid columns={2}>
+              <DataRow label="Organisation" className="sm:col-span-2">
+                {subAgent.organisation_name}
+              </DataRow>
+              <DataRow label="Contact person" className="sm:col-span-2">
+                {contactIsPlaceholder ? (
+                  <Badge tone="caution">Not yet provided</Badge>
+                ) : (
+                  subAgent.contact_person || '—'
+                )}
+              </DataRow>
+              <DataRow label="Country">{subAgent.country || '—'}</DataRow>
+              <DataRow label="Status">
+                {subAgent.active_status ? (
+                  <Badge tone="positive" treatment="solid">
+                    Active
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral">Inactive</Badge>
+                )}
+              </DataRow>
+              <DataRow label="Email">
+                {subAgent.email ? (
+                  <a href={`mailto:${subAgent.email}`} className="break-all text-brand-700 hover:underline">
+                    {subAgent.email}
+                  </a>
+                ) : (
+                  '—'
+                )}
+              </DataRow>
+              <DataRow label="Phone">{subAgent.phone_number || '—'}</DataRow>
+              <DataRow label="Internal code" identifier className="sm:col-span-2">
+                {subAgent.internal_code || '—'}
+              </DataRow>
+            </DataGrid>
+          </Panel>
+
+          <Panel
+            title="Operational summary"
+            description="How this organisation's pilgrims are currently distributed."
+          >
+            <PopulationBreakdown population={population} />
+
+            <div className="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-4">
+              <FilterLink to={filterBase} label="All assigned pilgrims" count={population.assigned} />
+              <FilterLink
+                to={`${filterBase}&status=in_saudi_arabia`}
+                label="In Saudi Arabia"
+                count={population.inSaudi}
+              />
+              <FilterLink
+                to={`${filterBase}&status=departing_soon`}
+                label="Departing within 3 days"
+                count={population.departingSoon}
+              />
+              <FilterLink
+                to={`${filterBase}&status=departure_overdue`}
+                label="Past the expected return date"
+                count={population.overdue}
+                critical
+              />
             </div>
-          </div>
+          </Panel>
 
           {subAgent.notes && (
-            <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-              <h3 className="font-display font-bold text-base text-slate-900 mb-3 flex items-center gap-2">
-                <StickyNote className="h-5 w-5 text-slate-400" /> Notes
-              </h3>
-              <p className="text-sm text-slate-600 whitespace-pre-wrap">{subAgent.notes}</p>
-            </div>
+            <Panel
+              title={
+                <span className="flex items-center gap-2">
+                  <StickyNote className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                  Notes
+                </span>
+              }
+            >
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{subAgent.notes}</p>
+            </Panel>
           )}
         </div>
 
-        <div className="lg:col-span-2 space-y-6">
-          {/* Stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {stats.map((s) => {
-              const Icon = s.icon;
-              return (
-                <div key={s.label} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${s.color}`}>
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <p className="mt-3 text-2xl font-display font-extrabold text-slate-900">{s.value}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{s.label}</p>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Assigned pilgrims */}
-          <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-100">
-              <h3 className="font-display font-bold text-base text-slate-900">Assigned Pilgrims ({pilgrims.length})</h3>
-            </div>
+        <div className="xl:col-span-2">
+          <Panel
+            title={`Assigned pilgrims (${pilgrims.length})`}
+            description="Every pilgrim whose responsibility is traced to this organisation."
+            bodyClassName="p-0"
+            actions={
+              pilgrims.length > 0 ? (
+                <ButtonLink
+                  to={filterBase}
+                  variant="secondary"
+                  size="sm"
+                  icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}
+                >
+                  Open in directory
+                </ButtonLink>
+              ) : undefined
+            }
+          >
             {pilgrims.length === 0 ? (
-              <div className="p-12 text-center">
-                <Users className="h-10 w-10 text-slate-300 mx-auto" />
-                <p className="mt-3 text-sm text-slate-500">No pilgrims assigned to this sub-agent.</p>
+              <div className="p-5">
+                <EmptyState
+                  icon={<Users className="h-5 w-5" aria-hidden="true" />}
+                  title="No pilgrims assigned"
+                  description="No pilgrim record currently names this organisation as responsible."
+                />
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-100 bg-slate-50/60">
-                      <th className="px-4 py-3 text-left font-semibold text-slate-600">Name</th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-600 hidden sm:table-cell">Nationality</th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-600">Status</th>
-                      <th className="px-4 py-3 text-right font-semibold text-slate-600"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pilgrims.map((p) => {
-                      const status = calculateJourneyStatus(p);
-                      const meta = STATUS_META[status];
-                      return (
-                        <tr key={p.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/40 transition-colors">
-                          <td className="px-4 py-3 font-semibold text-slate-900">{p.full_name}</td>
-                          <td className="px-4 py-3 text-slate-600 hidden sm:table-cell">{p.nationality}</td>
-                          <td className="px-4 py-3">
-                            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${meta.bgColor} ${meta.color} border ${meta.borderColor}`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${meta.dotColor}`} />
-                              {meta.label}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <Link to={`/app/pilgrims/${p.id}`} className="text-xs font-semibold text-brand-600 hover:text-brand-700">
-                              View →
+              <>
+                <div className="hidden md:block">
+                  <TableFrame
+                    caption={`Pilgrims assigned to ${subAgent.organisation_name}`}
+                    className="rounded-none border-0"
+                  >
+                    <THead>
+                      <tr>
+                        <TH>Name</TH>
+                        <TH className="hidden lg:table-cell">Nationality</TH>
+                        <TH className="hidden xl:table-cell">Passport</TH>
+                        <TH numeric>Sched. return</TH>
+                        <TH>Status</TH>
+                        <TH align="right">
+                          <span className="sr-only">Actions</span>
+                        </TH>
+                      </tr>
+                    </THead>
+                    <TBody>
+                      {pilgrims.map((p) => (
+                        <TR key={p.id}>
+                          <TD>
+                            <Link
+                              to={`/app/pilgrims/${p.id}`}
+                              className="font-semibold text-slate-900 hover:text-brand-700 hover:underline"
+                            >
+                              {p.full_name}
                             </Link>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                          </TD>
+                          <TD className="hidden lg:table-cell">{p.nationality}</TD>
+                          <TD className="hidden xl:table-cell">
+                            <Identifier value={p.passport_number} />
+                          </TD>
+                          <TD numeric className="whitespace-nowrap">
+                            {formatDate(p.expected_return_date, 'Not set')}
+                          </TD>
+                          <TD>
+                            <StatusBadge status={calculateJourneyStatus(p)} record={p} />
+                          </TD>
+                          <TD align="right">
+                            <Link
+                              to={`/app/pilgrims/${p.id}`}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline"
+                            >
+                              View
+                              <ArrowRight className="h-3 w-3" aria-hidden="true" />
+                            </Link>
+                          </TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </TableFrame>
+                </div>
+
+                <div className="space-y-3 p-4 md:hidden">
+                  {pilgrims.map((p) => (
+                    <RecordCard key={p.id}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <Link
+                            to={`/app/pilgrims/${p.id}`}
+                            className="font-semibold text-slate-900 hover:text-brand-700 hover:underline"
+                          >
+                            {p.full_name}
+                          </Link>
+                          <p className="mt-0.5 text-xs text-slate-600">
+                            {p.nationality} · <Identifier value={p.passport_number} />
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Sched. return {formatDate(p.expected_return_date, 'not set')}
+                          </p>
+                        </div>
+                        <StatusBadge
+                          status={calculateJourneyStatus(p)}
+                          record={p}
+                          className="shrink-0"
+                        />
+                      </div>
+                    </RecordCard>
+                  ))}
+                </div>
+              </>
             )}
-          </div>
+          </Panel>
         </div>
       </div>
     </div>
   );
 }
 
-function DetailRow({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) {
+/** Direct link into the filtered pilgrim directory. Quiet when the count is zero. */
+function FilterLink({
+  to,
+  label,
+  count,
+  critical,
+}: {
+  to: string;
+  label: string;
+  count: number;
+  critical?: boolean;
+}) {
+  if (count === 0) {
+    return (
+      <p className="flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-400">
+        <span>{label}</span>
+        <span className="tabular-nums">0</span>
+      </p>
+    );
+  }
+
   return (
-    <div className="flex items-start gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-slate-400">
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">{label}</p>
-        <p className="text-sm font-semibold text-slate-900 mt-0.5 break-words">{value}</p>
-      </div>
-    </div>
+    <Link
+      to={to}
+      className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm transition-colors ${
+        critical
+          ? 'border-red-300 text-red-900 hover:bg-red-50'
+          : 'border-slate-300 text-slate-800 hover:bg-slate-50'
+      }`}
+    >
+      <span className="font-medium">{label}</span>
+      <span className="flex items-center gap-1.5">
+        <span className="font-bold tabular-nums">{count}</span>
+        <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+      </span>
+    </Link>
   );
 }

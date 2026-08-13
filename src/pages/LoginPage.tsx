@@ -1,9 +1,19 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Lock, Mail, ArrowLeft, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { Logo } from '@/components/Logo';
 import { friendlyError } from '@/lib/validation';
+import { Alert } from '@/components/ui/Alert';
+import { Button } from '@/components/ui/Button';
+import { Field, Input } from '@/components/ui/Field';
+
+const CAPABILITIES = [
+  { label: 'Pilgrim journey control', detail: 'Arrival and departure state, confirmed or derived' },
+  { label: 'Sub-agent accountability', detail: 'Responsibility traced to an organisation' },
+  { label: 'Departure-risk monitoring', detail: 'Overdue and unconfirmed follow-up' },
+  { label: 'Visa & contract logging', detail: 'Reviewed extraction into the pilgrim record' },
+];
 
 export default function LoginPage() {
   const { signIn } = useAuth();
@@ -12,7 +22,6 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -38,165 +47,168 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex">
-      {/* Left brand panel */}
-      <div className="hidden lg:flex lg:w-1/2 relative bg-navy-900 text-white flex-col justify-between p-12 overflow-hidden">
-        <div className="absolute inset-0 bg-islamic-pattern opacity-40" />
-        <div className="absolute inset-0 bg-gradient-to-br from-navy-950 via-navy-900 to-brand-900" />
+    <div className="flex min-h-screen flex-col lg:flex-row">
+      {/* Brand / context panel */}
+      <div className="relative hidden overflow-hidden bg-navy-900 text-white lg:flex lg:w-[46%] lg:flex-col lg:justify-between lg:p-12">
+        <div className="absolute inset-0 bg-hajj-motif opacity-70" aria-hidden="true" />
+        <div
+          className="absolute inset-0 bg-gradient-to-br from-navy-950 via-navy-900 to-brand-900"
+          aria-hidden="true"
+        />
+
         <div className="relative z-10">
-          <Link to="/" className="inline-flex items-center gap-2 text-sm text-white/60 hover:text-white transition-colors">
-            <ArrowLeft className="h-4 w-4" />
-            Back to home
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 rounded px-1 py-0.5 text-sm text-white/60 transition-colors hover:text-white"
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            Return to gateway
           </Link>
         </div>
+
         <div className="relative z-10">
-          <Logo variant="badge" imgClassName="h-20 w-20 rounded-full bg-white p-1" className="mb-8" />
-          <h1 className="font-display text-4xl font-extrabold leading-tight text-balance">
+          <Logo variant="badge" imgClassName="h-16 w-16 rounded-md bg-white p-1.5" className="mb-8" />
+          <p className="text-2xs font-bold uppercase tracking-[0.28em] text-gold-300">Inna Ataina Travels</p>
+          <h1 className="mt-3 font-display text-3xl font-extrabold leading-tight text-balance xl:text-4xl">
             HajjERP Operations Platform
           </h1>
-          <p className="mt-4 text-lg text-white/60 leading-relaxed max-w-md">
-            Pilgrim Journey Control & Risk Monitoring — a secure internal control centre for Inna Ataina Travels.
+          <p className="mt-4 max-w-md text-base leading-relaxed text-white/70">
+            The internal control centre for Hajj and Umrah operations — where every pilgrim's position is either
+            confirmed by a named officer or clearly marked as derived from a plan.
           </p>
-          <div className="mt-10 grid grid-cols-2 gap-4 max-w-md">
-            {['Pilgrim Tracking', 'Sub-Agent Accountability', 'Risk Monitoring', 'Operations Dashboard'].map((label) => (
-              <div key={label} className="flex items-center gap-2 text-sm text-white/70">
-                <ShieldCheck className="h-4 w-4 text-gold-300 shrink-0" />
-                {label}
+
+          <div className="mt-9 grid max-w-lg grid-cols-1 gap-px overflow-hidden rounded-md border border-white/10 bg-white/10 sm:grid-cols-2">
+            {CAPABILITIES.map((capability) => (
+              <div key={capability.label} className="bg-navy-900/80 px-4 py-3.5">
+                <p className="text-sm font-semibold text-white">{capability.label}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-white/50">{capability.detail}</p>
               </div>
             ))}
           </div>
         </div>
-        <div className="relative z-10 text-xs text-white/40">
-          Authorised staff access only. Activity may be monitored for operational security.
+
+        <div className="relative z-10 border-t border-white/10 pt-5 text-xs leading-relaxed text-white/45">
+          Authorised staff access only. Activity is recorded in the platform audit history for operational
+          security.
         </div>
       </div>
 
-      {/* Right login form */}
-      <div className="flex-1 flex flex-col justify-center px-6 sm:px-12 lg:px-20 bg-slate-50">
+      {/* Sign-in panel */}
+      <div className="flex flex-1 flex-col justify-center bg-slate-100 px-4 py-10 sm:px-8 lg:px-14">
         <div className="mx-auto w-full max-w-md">
-          {/* Mobile logo */}
-          <div className="lg:hidden mb-8 text-center">
-            <Link to="/" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 mb-6">
-              <ArrowLeft className="h-4 w-4" />
-              Back to home
-            </Link>
-            <Logo variant="badge" imgClassName="h-16 w-16 rounded-full bg-white p-1 mx-auto" className="justify-center" />
+          <div className="mb-7 text-center lg:hidden">
+            <Logo
+              variant="badge"
+              imgClassName="mx-auto h-14 w-14 rounded-md bg-white p-1.5"
+              className="justify-center"
+            />
+            <p className="mt-3 font-display text-lg font-extrabold text-navy-900">HajjERP</p>
+            <p className="text-xs text-slate-500">Operations Platform</p>
           </div>
 
-          <div className="rounded-2xl bg-white shadow-xl border border-slate-100 p-8 sm:p-10">
-            <div className="mb-8">
-              <p className="text-sm font-semibold tracking-wider text-brand-600 uppercase">HajjERP Operations Platform</p>
-              <h2 className="mt-2 font-display text-2xl font-extrabold text-slate-900">Welcome Back</h2>
-              <p className="mt-2 text-sm text-slate-500">Sign in to access the Operations Control Centre</p>
+          <div className="rounded-lg border border-slate-300 bg-white">
+            <div className="border-b border-slate-200 px-6 py-5">
+              <p className="text-2xs font-bold uppercase tracking-widest text-brand-700">Staff sign in</p>
+              <h2 className="mt-1.5 font-display text-xl font-extrabold text-navy-900">
+                Operations Control Centre
+              </h2>
+              <p className="mt-1.5 text-sm text-slate-600">
+                Sign in with the credentials issued to you by an Administrator.
+              </p>
             </div>
 
-            {error && (
-              <div className="mb-5 flex items-start gap-3 rounded-xl bg-red-50 border border-red-200 p-4 animate-scale-in">
-                <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                <p className="text-sm text-red-700">{error}</p>
-              </div>
-            )}
+            <form onSubmit={handleSubmit} className="space-y-5 px-6 py-6" noValidate>
+              {error && <Alert tone="critical" title="Sign-in failed">{error}</Alert>}
 
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label htmlFor="email" className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  Email
-                </label>
+              <Field label="Email" htmlFor="login-email" required>
+                <Input
+                  id="login-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@innaataina.com"
+                  disabled={loading}
+                  invalid={Boolean(error)}
+                  leadingIcon={<Mail className="h-4 w-4" aria-hidden="true" />}
+                />
+              </Field>
+
+              <Field label="Password" htmlFor="login-password" required>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-                  <input
-                    id="email"
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@innaataina.com"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-                    disabled={loading}
+                  <Lock
+                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                    aria-hidden="true"
                   />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="password" className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-                  <input
-                    id="password"
+                  <Input
+                    id="login-password"
                     type={showPassword ? 'text' : 'password'}
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Enter your password"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-11 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
                     disabled={loading}
+                    invalid={Boolean(error)}
+                    className="pl-9 pr-11"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                    className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
                   >
-                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <Eye className="h-4 w-4" aria-hidden="true" />
+                    )}
                   </button>
                 </div>
-              </div>
+              </Field>
 
-              <div className="flex items-center justify-between">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={remember}
-                    onChange={(e) => setRemember(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-200"
-                  />
-                  <span className="text-sm text-slate-600">Remember me</span>
-                </label>
+              <div className="flex justify-end">
                 <button
                   type="button"
                   onClick={() => setForgotOpen((v) => !v)}
-                  className="text-sm font-medium text-brand-600 hover:text-brand-700 transition-colors"
+                  aria-expanded={forgotOpen}
+                  aria-controls="forgot-password-help"
+                  className="rounded px-1 py-0.5 text-sm font-semibold text-brand-700 transition-colors hover:text-brand-800 hover:underline"
                 >
                   Forgot password?
                 </button>
               </div>
 
               {forgotOpen && (
-                <div className="rounded-xl bg-brand-50 border border-brand-100 p-4 text-sm text-brand-800 animate-scale-in">
-                  Please contact your Administrator to reset your password. Self-service password reset is not available on this platform.
+                <div id="forgot-password-help">
+                  <Alert tone="info" title="Password resets are administered">
+                    Contact your Administrator to have your password reset. Self-service password reset is not
+                    available on this platform.
+                  </Alert>
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-900/20 hover:bg-brand-400 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    Signing in...
-                  </>
-                ) : (
-                  <>
-                    <Lock className="h-5 w-5" />
-                    Secure Sign In
-                  </>
-                )}
-              </button>
-            </form>
+              <Button type="submit" size="lg" fullWidth loading={loading} icon={<Lock className="h-4 w-4" />}>
+                {loading ? 'Signing in…' : 'Secure sign in'}
+              </Button>
 
-            <div className="mt-6 pt-6 border-t border-slate-100">
-              <p className="text-center text-xs text-slate-400 leading-relaxed">
-                Authorised staff access only. Activity may be monitored for operational security.
+              {/*
+                Session persistence is governed entirely by the existing Supabase
+                client configuration. No "remember me" control is offered, because
+                offering one would misrepresent what the platform actually does.
+              */}
+              <p className="border-t border-slate-200 pt-4 text-xs leading-relaxed text-slate-500">
+                Your session stays active until you sign out or it expires. Sign out when you leave a shared
+                workstation.
               </p>
-            </div>
+            </form>
           </div>
 
-          <p className="mt-6 text-center text-sm text-slate-500">
-            Need an account? Contact an Administrator to request staff access.
+          <p className="mt-5 text-center text-sm text-slate-600">
+            Need an account? Contact an Administrator.
+            <span className="mt-0.5 block text-xs text-slate-500">
+              There is no public registration on this platform.
+            </span>
           </p>
         </div>
       </div>

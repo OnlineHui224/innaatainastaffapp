@@ -71,16 +71,50 @@ export default function SubAgentsPage() {
     fetchData();
   }, [fetchData]);
 
+  /**
+   * Risk-first ordering.
+   *
+   * The directory is an operational surface, so the organisations needing
+   * attention sort to the top rather than whichever happens to start with "A".
+   * Order of precedence, each descending:
+   *
+   *   overdue → departing soon → in Saudi Arabia → assigned → name (A–Z)
+   *
+   * The alphabetical query order is only the stable tie-break: agents carrying
+   * no operational risk fall to the bottom in a predictable A–Z sequence.
+   *
+   * This sorts the rows the metrics produce. It does not change how any metric
+   * is calculated.
+   */
   const filtered = useMemo(() => {
-    if (!search) return subAgents;
-    const q = search.toLowerCase();
-    return subAgents.filter(
-      (agent) =>
-        agent.organisation_name.toLowerCase().includes(q) ||
-        agent.contact_person.toLowerCase().includes(q) ||
-        agent.country.toLowerCase().includes(q),
-    );
+    const q = search.trim().toLowerCase();
+    const matching = q
+      ? subAgents.filter(
+          (agent) =>
+            agent.organisation_name.toLowerCase().includes(q) ||
+            agent.contact_person.toLowerCase().includes(q) ||
+            agent.country.toLowerCase().includes(q),
+        )
+      : subAgents;
+
+    return [...matching].sort((a, b) => {
+      const pa = a.population;
+      const pb = b.population;
+      return (
+        pb.overdue - pa.overdue ||
+        pb.departingSoon - pa.departingSoon ||
+        pb.inSaudi - pa.inSaudi ||
+        pb.assigned - pa.assigned ||
+        a.organisation_name.localeCompare(b.organisation_name)
+      );
+    });
   }, [subAgents, search]);
+
+  /** True once every remaining row carries no risk — used to explain the ordering honestly. */
+  const hasAnyRisk = useMemo(
+    () => filtered.some((agent) => agent.population.overdue > 0 || agent.population.departingSoon > 0),
+    [filtered],
+  );
 
   const totalOverdue = useMemo(
     () => subAgents.reduce((sum, agent) => sum + agent.population.overdue, 0),
@@ -161,6 +195,15 @@ export default function SubAgentsPage() {
           placeholder="Search by organisation, contact person or country…"
         />
       </div>
+
+      {/* The ordering is stated plainly so an alphabetical list is never assumed. */}
+      {!loading && !error && filtered.length > 0 && (
+        <p className="mb-3 text-xs text-slate-600">
+          {hasAnyRisk
+            ? 'Ordered by operational risk: overdue first, then departing soon, then in-country population. Organisations carrying no risk follow in alphabetical order.'
+            : 'No organisation currently carries overdue or departing-soon pilgrims, so the directory is listed by in-country population, then alphabetically.'}
+        </p>
+      )}
 
       {loading ? (
         <TableSkeleton rows={6} columns={7} />

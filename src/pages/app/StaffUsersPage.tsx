@@ -185,8 +185,8 @@ export default function StaffUsersPage() {
       setInviteError('That email address is not valid.');
       return;
     }
-    if (invitePassword.length < 6) {
-      setInviteError('The temporary password must be at least 6 characters.');
+    if (invitePassword.length < 12) {
+      setInviteError('The temporary password must be at least 12 characters.');
       return;
     }
     setActionLoading(true);
@@ -276,8 +276,8 @@ export default function StaffUsersPage() {
   async function handleResetPassword() {
     if (modal?.kind !== 'reset_password') return;
     setActionError(null);
-    if (!newPassword || newPassword.length < 6) {
-      setActionError('The new temporary password must be at least 6 characters.');
+    if (!newPassword || newPassword.length < 12) {
+      setActionError('The new temporary password must be at least 12 characters.');
       return;
     }
     setActionLoading(true);
@@ -644,7 +644,7 @@ export default function StaffUsersPage() {
               label="Temporary password"
               htmlFor="invite-password"
               required
-              hint="At least 6 characters. Share it through a secure channel."
+              hint="At least 12 characters. Share it through a secure channel."
               className="sm:col-span-2"
             >
               <Input
@@ -826,7 +826,7 @@ export default function StaffUsersPage() {
               Set a new temporary password for <strong>{modal.user.full_name}</strong>. They will be required to
               change it at their next login. Share it through a secure channel.
             </p>
-            <Field label="New temporary password" htmlFor="reset-password" required hint="At least 6 characters.">
+            <Field label="New temporary password" htmlFor="reset-password" required hint="At least 12 characters.">
               <Input
                 id="reset-password"
                 type="password"

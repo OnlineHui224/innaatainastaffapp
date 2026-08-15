@@ -33,8 +33,8 @@ export function PasswordChangeModal() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters.');
       return;
     }
     if (password !== confirm) {
@@ -76,7 +76,7 @@ export function PasswordChangeModal() {
         <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5" noValidate>
           {error && <Alert tone="critical">{error}</Alert>}
 
-          <Field label="New password" htmlFor="new-password" required hint="At least 6 characters.">
+          <Field label="New password" htmlFor="new-password" required hint="At least 12 characters.">
             <Input
               id="new-password"
               type="password"

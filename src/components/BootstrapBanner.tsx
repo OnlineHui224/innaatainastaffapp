@@ -65,7 +65,8 @@ export function BootstrapBanner() {
       await refreshProfile();
       setDone(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Bootstrap failed.');
+      console.error('Bootstrap failed:', e);
+      setError('This step could not be completed. Please contact your administrator.');
     } finally {
       setBootstrapping(false);
     }

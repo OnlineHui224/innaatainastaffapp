@@ -741,7 +741,7 @@ export default function VisaLoggerPage() {
         }
       />
 
-      <div className="mb-6 rounded-lg border border-slate-300 bg-white px-4 py-3.5">
+      <div className="mb-5 rounded-lg border border-slate-300 bg-white px-4 py-3">
         <WorkflowStepper currentStep={step} completedSteps={completedSteps} />
       </div>
 
@@ -767,8 +767,8 @@ export default function VisaLoggerPage() {
           />
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="space-y-6 xl:col-span-2">
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          <div className="space-y-5 xl:col-span-2">
             {step === 'case_details' && (
               <>
                 <CaseDetailsCard
@@ -1056,7 +1056,7 @@ export default function VisaLoggerPage() {
           </div>
 
           {/* Case state — all four provenance stages are visible simultaneously */}
-          <div className="space-y-6 xl:col-span-1">
+          <div className="space-y-5 xl:col-span-1">
             <Panel
               title="Case state"
               description="AI Extracted → Human Reviewed → Matched to HajjERP → Saved. These stages are never collapsed into one another."

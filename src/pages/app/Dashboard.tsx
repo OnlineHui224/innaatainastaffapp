@@ -133,55 +133,62 @@ export default function Dashboard() {
       {loading ? (
         <DashboardSkeleton />
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-5">
           {/* ── Tier 1 — Critical ───────────────────────────────────────── */}
           <section aria-labelledby="tier-critical">
             <SectionHeading>Tier 1 — Critical</SectionHeading>
             <h2 id="tier-critical" className="sr-only">
               Critical operational risk
             </h2>
+            {/* Urgency carried by the red rule, the count and the icon — not by
+                vertical space. The overstay caveat stays verbatim, on one line. */}
             {metrics.overdue > 0 ? (
               <div className="overflow-hidden rounded-lg border border-red-400 bg-white">
-                <div className="h-1 bg-red-600" aria-hidden="true" />
-                <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start">
-                  <AlertTriangle className="h-6 w-6 shrink-0 text-red-700" aria-hidden="true" />
-                  <div className="min-w-0 flex-1">
-                    <p className="font-display text-base font-extrabold text-red-900">
-                      <span className="tabular-nums">{metrics.overdue}</span>{' '}
-                      {metrics.overdue === 1 ? 'pilgrim has' : 'pilgrims have'} passed the expected return date
-                      without a confirmed departure
-                    </p>
-                    <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-red-900/85">
-                      This is an operational flag — it does not confirm a legal overstay. It means no staff
-                      member has yet recorded a departure for these records. Please follow up immediately.
-                    </p>
-                    {overdueAgentCount > 0 && (
-                      <p className="mt-1.5 text-xs text-red-900/70">
-                        Spread across {overdueAgentCount} {overdueAgentCount === 1 ? 'sub-agent' : 'sub-agents'}.
+                <div className="h-0.5 bg-red-600" aria-hidden="true" />
+                <div className="flex flex-col gap-3 p-3.5 lg:flex-row lg:items-center lg:gap-4">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <span
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-red-300 bg-red-50"
+                      aria-hidden="true"
+                    >
+                      <AlertTriangle className="h-5 w-5 text-red-700" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-display text-sm font-extrabold leading-tight text-red-900">
+                        <span className="text-lg tabular-nums">{metrics.overdue}</span>{' '}
+                        {metrics.overdue === 1 ? 'pilgrim has' : 'pilgrims have'} passed the expected return
+                        date without a confirmed departure
+                        {overdueAgentCount > 0 && (
+                          <span className="whitespace-nowrap font-semibold text-red-900/70">
+                            {' · '}across {overdueAgentCount}{' '}
+                            {overdueAgentCount === 1 ? 'sub-agent' : 'sub-agents'}
+                          </span>
+                        )}
                       </p>
-                    )}
+                      <p className="mt-1 text-xs leading-snug text-red-900/80">
+                        This is an operational flag — it does not confirm a legal overstay. No staff member has
+                        yet recorded a departure for these records.
+                      </p>
+                    </div>
                   </div>
                   <ButtonLink
                     to="/app/pilgrims?status=departure_overdue"
                     variant="critical"
+                    size="sm"
                     className="shrink-0"
-                    icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
+                    icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}
                   >
-                    Review overdue records
+                    Review overdue
                   </ButtonLink>
                 </div>
               </div>
             ) : (
-              <div className="flex items-start gap-3 rounded-lg border border-emerald-300 bg-emerald-50/50 p-5">
+              <div className="flex items-center gap-3 rounded-lg border border-emerald-300 bg-emerald-50/50 px-3.5 py-3">
                 <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-700" aria-hidden="true" />
-                <div>
-                  <p className="font-display text-sm font-bold text-emerald-900">
-                    No overdue departures on record
-                  </p>
-                  <p className="mt-1 text-sm text-emerald-900/80">
-                    No pilgrim currently sits past their expected return date without a confirmed departure.
-                  </p>
-                </div>
+                <p className="text-[0.8125rem] leading-snug text-emerald-900">
+                  <span className="font-bold">No overdue departures on record.</span> No pilgrim currently sits
+                  past their expected return date without a confirmed departure.
+                </p>
               </div>
             )}
           </section>
@@ -194,7 +201,7 @@ export default function Dashboard() {
             <h2 id="tier-followup" className="sr-only">
               Records requiring follow-up
             </h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
               <MetricTile
                 label="Unconfirmed departures"
                 value={metrics.unconfirmed}
@@ -223,6 +230,7 @@ export default function Dashboard() {
             </div>
           </section>
 
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
           {/* ── Tier 3 — Confirmed presence ─────────────────────────────── */}
           <section aria-labelledby="tier-presence">
             <SectionHeading description="Pilgrims recorded as physically present in Saudi Arabia, with no confirmed departure.">
@@ -231,13 +239,12 @@ export default function Dashboard() {
             <h2 id="tier-presence" className="sr-only">
               Confirmed presence
             </h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3.5">
               <MetricTile
                 label="In Saudi Arabia"
                 value={metrics.inSaudiArabia}
                 provenance="confirmed"
                 emphasis="confirmed"
-                className="md:col-span-2"
                 context={
                   <>
                     <p>
@@ -275,7 +282,7 @@ export default function Dashboard() {
             <h2 id="tier-general" className="sr-only">
               General operational information
             </h2>
-            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-300 bg-slate-300 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-300 bg-slate-300 sm:grid-cols-3 xl:grid-cols-1">
               <MetricLine
                 label="Total pilgrims"
                 value={metrics.total}
@@ -299,6 +306,8 @@ export default function Dashboard() {
               />
             </div>
           </section>
+
+          </div>
 
           {/* ── Priority records ────────────────────────────────────────── */}
           <PriorityRecords rows={priorityPilgrims} />
@@ -341,13 +350,15 @@ function PriorityRecords({ rows }: { rows: PilgrimRow[] }) {
             <TableFrame caption="Pilgrim records ordered by operational urgency">
               <THead>
                 <tr>
-                  <TH>Name</TH>
-                  <TH>Nationality</TH>
-                  <TH>Scheduled / expected departure</TH>
-                  <TH>Status</TH>
-                  <TH>Sub-agent</TH>
-                  <TH>Why it is first</TH>
-                  <TH align="right">
+                  <TH nowrap>Name</TH>
+                  <TH className="hidden xl:table-cell">Nationality</TH>
+                  {/* Header labels wrap by design — a nowrap label inflates the
+                      table's min-content width and pushes a scrollbar onto the page. */}
+                  <TH numeric>Sched. out / return</TH>
+                  <TH nowrap>Status</TH>
+                  <TH className="hidden xl:table-cell">Sub-agent</TH>
+                  <TH className="hidden 2xl:table-cell">Why it is first</TH>
+                  <TH align="right" nowrap>
                     <span className="sr-only">Actions</span>
                   </TH>
                 </tr>
@@ -358,20 +369,36 @@ function PriorityRecords({ rows }: { rows: PilgrimRow[] }) {
                   const reason = priorityReason(p, status);
                   return (
                     <TR key={p.id}>
-                      <TD className="font-semibold text-slate-900">{p.full_name}</TD>
-                      <TD>{p.nationality}</TD>
-                      <TD className="whitespace-nowrap">
+                      <TD>
+                        <Link
+                          to={`/app/pilgrims/${p.id}`}
+                          className="font-semibold text-slate-900 hover:text-brand-700 hover:underline"
+                        >
+                          {p.full_name}
+                        </Link>
+                        <span className="mt-0.5 block text-xs text-slate-500 xl:hidden">
+                          {p.nationality}
+                          {p.sub_agents ? ` · ${p.sub_agents.organisation_name}` : ' · Unassigned'}
+                        </span>
+                        {/* Below 2xl the reason becomes secondary record text rather
+                            than being forced into a column that will not fit. */}
+                        <span className="mt-0.5 block max-w-md text-xs leading-snug text-slate-600 2xl:hidden">
+                          {reason.text}
+                        </span>
+                      </TD>
+                      <TD className="hidden xl:table-cell">{p.nationality}</TD>
+                      <TD numeric className="whitespace-nowrap">
                         <span className="block">{formatDate(p.expected_departure_date, 'Not set')}</span>
                         {p.expected_return_date && (
                           <span className="mt-0.5 block text-xs text-slate-500">
-                            Return {formatDate(p.expected_return_date)}
+                            {formatDate(p.expected_return_date)}
                           </span>
                         )}
                       </TD>
                       <TD>
                         <StatusBadge status={status} record={p} />
                       </TD>
-                      <TD>
+                      <TD className="hidden xl:table-cell">
                         {p.sub_agents ? (
                           <Link
                             to={`/app/sub-agents/${p.sub_agents.id}`}
@@ -383,7 +410,9 @@ function PriorityRecords({ rows }: { rows: PilgrimRow[] }) {
                           <span className="text-slate-500">Unassigned</span>
                         )}
                       </TD>
-                      <TD className="max-w-xs text-xs leading-relaxed text-slate-600">{reason.text}</TD>
+                      <TD className="hidden max-w-xs text-xs leading-snug text-slate-600 2xl:table-cell">
+                        {reason.text}
+                      </TD>
                       <TD align="right">
                         <Link
                           to={`/app/pilgrims/${p.id}`}
@@ -451,7 +480,7 @@ function PriorityRecords({ rows }: { rows: PilgrimRow[] }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="space-y-8" aria-busy="true">
+    <div className="space-y-5" aria-busy="true">
       <Skeleton className="h-24 w-full rounded-lg" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Skeleton className="h-40 rounded-lg" />

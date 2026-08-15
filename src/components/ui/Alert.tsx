@@ -45,12 +45,12 @@ export function Alert({ tone = 'info', title, children, onDismiss, className, ac
   const Icon = cfg.Icon;
 
   return (
-    <div role={cfg.role} className={cn('flex items-start gap-3 rounded-md border p-4', cfg.wrap, className)}>
-      <Icon className={cn('mt-0.5 h-5 w-5 shrink-0', cfg.icon)} aria-hidden="true" />
+    <div role={cfg.role} className={cn('flex items-start gap-2.5 rounded-md border px-3.5 py-3', cfg.wrap, className)}>
+      <Icon className={cn('mt-px h-4 w-4 shrink-0', cfg.icon)} aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        {title && <p className="text-sm font-bold">{title}</p>}
-        {children && <div className={cn('text-sm leading-relaxed', Boolean(title) && 'mt-1')}>{children}</div>}
-        {actions && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
+        {title && <p className="text-[0.8125rem] font-bold leading-snug">{title}</p>}
+        {children && <div className={cn('text-xs leading-snug sm:text-[0.8125rem]', Boolean(title) && 'mt-0.5')}>{children}</div>}
+        {actions && <div className="mt-2.5 flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
       {onDismiss && (
         <button

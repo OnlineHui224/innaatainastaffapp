@@ -451,12 +451,12 @@ export default function HotelImportPage() {
                 <TableFrame caption="Parsed hotel reference rows">
                   <THead>
                     <tr>
-                      <TH numeric>Row</TH>
-                      <TH>City</TH>
-                      <TH>Hotel name</TH>
-                      <TH>Licence</TH>
-                      <TH>Match</TH>
-                      <TH>Status</TH>
+                      <TH numeric nowrap>Row</TH>
+                      <TH nowrap>City</TH>
+                      <TH nowrap>Hotel name</TH>
+                      <TH nowrap>Licence</TH>
+                      <TH nowrap>Match</TH>
+                      <TH nowrap>Status</TH>
                     </tr>
                   </THead>
                   <TBody>

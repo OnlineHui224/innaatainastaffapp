@@ -948,12 +948,12 @@ export default function ImportCsvPage() {
                 <TableFrame caption="Rows that will be imported as pilgrim records">
                   <THead>
                     <tr>
-                      <TH numeric>Row</TH>
-                      <TH>Name</TH>
-                      <TH>Passport</TH>
-                      <TH>Agent</TH>
-                      <TH numeric>Outbound</TH>
-                      <TH numeric>Return</TH>
+                      <TH numeric nowrap>Row</TH>
+                      <TH nowrap>Name</TH>
+                      <TH nowrap>Passport</TH>
+                      <TH nowrap>Agent</TH>
+                      <TH numeric nowrap>Outbound</TH>
+                      <TH numeric nowrap>Return</TH>
                     </tr>
                   </THead>
                   <TBody>

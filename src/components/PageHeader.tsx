@@ -36,18 +36,20 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <header className={cn('mb-6', className)}>
-      <div className="flex flex-col gap-3 border-b border-slate-300 pb-4 lg:flex-row lg:items-end lg:justify-between">
+    <header className={cn('mb-5', className)}>
+      <div className="flex flex-col gap-2.5 border-b border-slate-300 pb-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
         <div className="min-w-0">
           {eyebrow && (
-            <p className="mb-1 text-2xs font-bold uppercase tracking-widest text-brand-700">{eyebrow}</p>
+            <p className="text-2xs font-bold uppercase tracking-[0.14em] text-brand-700">{eyebrow}</p>
           )}
-          <h1 className="font-display text-xl font-extrabold tracking-tight text-navy-900 sm:text-2xl">
+          <h1 className="mt-0.5 font-display text-[1.375rem] font-extrabold leading-tight tracking-tight text-navy-900">
             {title}
           </h1>
-          {subtitle && <div className="mt-1.5 max-w-3xl text-sm leading-relaxed text-slate-600">{subtitle}</div>}
+          {subtitle && (
+            <div className="mt-1 max-w-2xl text-[0.8125rem] leading-snug text-slate-600">{subtitle}</div>
+          )}
         </div>
-        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 lg:pt-1">{actions}</div>}
       </div>
       {children}
     </header>

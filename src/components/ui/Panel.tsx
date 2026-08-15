@@ -40,19 +40,19 @@ export function Panel({
   return (
     <Tag id={id} className={cn('rounded-lg border bg-white', EDGES[edge], className)}>
       {(title || actions) && (
-        <div className="flex flex-col gap-3 border-b border-inherit px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 border-b border-inherit px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             {title && (
-              <h2 className="font-display text-sm font-bold uppercase tracking-wide text-navy-900">
+              <h2 className="font-display text-[0.8125rem] font-bold uppercase tracking-[0.08em] text-navy-900">
                 {title}
               </h2>
             )}
-            {description && <p className="mt-1 text-xs leading-relaxed text-slate-600">{description}</p>}
+            {description && <p className="mt-0.5 text-xs leading-snug text-slate-600">{description}</p>}
           </div>
           {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
         </div>
       )}
-      <div className={cn('px-5 py-4', bodyClassName)}>{children}</div>
+      <div className={cn('px-4 py-3.5', bodyClassName)}>{children}</div>
     </Tag>
   );
 }
@@ -91,7 +91,7 @@ export function DataGrid({
   return (
     <dl
       className={cn(
-        'grid gap-x-6 gap-y-4',
+        'grid gap-x-5 gap-y-3',
         columns === 2 && 'grid-cols-1 sm:grid-cols-2',
         columns === 3 && 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
         columns === 4 && 'grid-cols-2 lg:grid-cols-4',
@@ -118,13 +118,15 @@ export function SectionHeading({
   return (
     <div
       className={cn(
-        'mb-3 flex flex-col gap-2 border-b border-slate-300 pb-2 sm:flex-row sm:items-end sm:justify-between',
+        'mb-2.5 flex flex-col gap-1.5 border-b border-slate-300 pb-1.5 sm:flex-row sm:items-end sm:justify-between',
         className,
       )}
     >
       <div className="min-w-0">
-        <h2 className="font-display text-sm font-bold uppercase tracking-wide text-navy-900">{children}</h2>
-        {description && <p className="mt-1 text-xs text-slate-600">{description}</p>}
+        <h2 className="font-display text-[0.8125rem] font-bold uppercase tracking-[0.08em] text-navy-900">
+          {children}
+        </h2>
+        {description && <p className="mt-0.5 text-xs leading-snug text-slate-600">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
     </div>

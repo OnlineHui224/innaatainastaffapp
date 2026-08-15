@@ -328,8 +328,8 @@ export default function PilgrimDetailsPage() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="space-y-6 xl:col-span-2">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <div className="space-y-5 xl:col-span-2">
           {/* Identity and responsibility */}
           <Panel title="Identity">
             <DataGrid columns={3}>
@@ -518,7 +518,7 @@ export default function PilgrimDetailsPage() {
         </div>
 
         {/* Right column — responsibility and activity */}
-        <div className="space-y-6">
+        <div className="space-y-5">
           <Panel title="Responsibility">
             {pilgrim.sub_agents ? (
               <Link

@@ -232,7 +232,7 @@ export default function AuditHistoryPage() {
         subtitle="An immutable record of platform activity. Record edits show what changed; everything else is presented as the event it was."
       />
 
-      <div className="mb-5 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white p-3 sm:flex-row sm:items-center">
+      <div className="mb-4 flex flex-col gap-2.5 rounded-lg border border-slate-300 bg-white p-2.5 sm:flex-row sm:items-center">
         <SearchInput
           label="Search the audit history"
           value={search}
@@ -279,11 +279,11 @@ export default function AuditHistoryPage() {
           <TableFrame caption="Platform audit history">
             <THead>
               <tr>
-                <TH>Action</TH>
-                <TH>Target</TH>
-                <TH>Performed by</TH>
-                <TH numeric>Timestamp</TH>
-                <TH align="right">Detail</TH>
+                <TH nowrap>Action</TH>
+                <TH nowrap>Target</TH>
+                <TH nowrap>Performed by</TH>
+                <TH numeric nowrap>Timestamp</TH>
+                <TH align="right" nowrap>Detail</TH>
               </tr>
             </THead>
             <TBody>
@@ -345,9 +345,9 @@ export default function AuditHistoryPage() {
                                 </caption>
                                 <thead className="border-b border-slate-300 bg-slate-100">
                                   <tr>
-                                    <TH>Field</TH>
-                                    <TH>Previous</TH>
-                                    <TH>New</TH>
+                                    <TH nowrap>Field</TH>
+                                    <TH nowrap>Previous</TH>
+                                    <TH nowrap>New</TH>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-200">

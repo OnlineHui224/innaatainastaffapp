@@ -380,7 +380,7 @@ export default function StaffUsersPage() {
         </Alert>
       )}
 
-      <div className="mb-5 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white p-3 sm:flex-row sm:items-center">
+      <div className="mb-4 flex flex-col gap-2.5 rounded-lg border border-slate-300 bg-white p-2.5 sm:flex-row sm:items-center">
         <SearchInput
           label="Search staff accounts"
           value={search}
@@ -420,15 +420,15 @@ export default function StaffUsersPage() {
             <TableFrame caption="Staff accounts, system roles and account status">
               <THead>
                 <tr>
-                  <TH>Staff member</TH>
-                  <TH>Job title</TH>
-                  <TH>System role</TH>
+                  <TH nowrap>Staff member</TH>
+                  <TH nowrap>Job title</TH>
+                  <TH nowrap>System role</TH>
                   <TH>Account status</TH>
-                  <TH numeric>Last login</TH>
+                  <TH numeric nowrap>Last login</TH>
                   <TH numeric className="hidden xl:table-cell">
                     Created
                   </TH>
-                  <TH align="right">Actions</TH>
+                  <TH align="right" nowrap>Actions</TH>
                 </tr>
               </THead>
               <TBody>

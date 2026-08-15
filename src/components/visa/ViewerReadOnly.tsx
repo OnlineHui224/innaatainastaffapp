@@ -93,7 +93,7 @@ export function ViewerReadOnly() {
         processing access.
       </ReadOnlyNotice>
 
-      <div className="rounded-lg border border-slate-300 bg-white p-3">
+      <div className="rounded-lg border border-slate-300 bg-white p-2.5">
         <SearchInput
           label="Search visa records"
           value={query}
@@ -136,12 +136,12 @@ export function ViewerReadOnly() {
               <TableFrame caption="Saved visa records" className="rounded-none border-0">
                 <THead>
                   <tr>
-                    <TH>Pilgrim</TH>
-                    <TH>Passport</TH>
-                    <TH>Visa number</TH>
-                    <TH className="hidden lg:table-cell">Agent</TH>
-                    <TH className="hidden lg:table-cell">Visa company</TH>
-                    <TH numeric>Recorded</TH>
+                    <TH nowrap>Pilgrim</TH>
+                    <TH nowrap>Passport</TH>
+                    <TH nowrap>Visa number</TH>
+                    <TH className="hidden lg:table-cell" nowrap>Agent</TH>
+                    <TH className="hidden lg:table-cell" nowrap>Visa company</TH>
+                    <TH numeric nowrap>Recorded</TH>
                   </tr>
                 </THead>
                 <TBody>

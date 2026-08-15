@@ -187,7 +187,7 @@ export default function SubAgentsPage() {
         </Alert>
       )}
 
-      <div className="mb-5 rounded-lg border border-slate-300 bg-white p-3">
+      <div className="mb-4 rounded-lg border border-slate-300 bg-white p-2.5">
         <SearchInput
           label="Search sub-agents"
           value={search}
@@ -237,15 +237,15 @@ export default function SubAgentsPage() {
             <TableFrame caption="Sub-agent operational directory">
               <THead>
                 <tr>
-                  <TH>Organisation</TH>
-                  <TH>Contact</TH>
-                  <TH>Country</TH>
-                  <TH>Status</TH>
-                  <TH align="right">Assigned</TH>
-                  <TH align="right">↳ In KSA</TH>
-                  <TH align="right">↳ Soon</TH>
-                  <TH align="right">↳ Overdue</TH>
-                  <TH align="right">Actions</TH>
+                  <TH nowrap>Organisation</TH>
+                  <TH nowrap>Contact</TH>
+                  <TH nowrap>Country</TH>
+                  <TH nowrap>Status</TH>
+                  <TH align="right" nowrap>Assigned</TH>
+                  <TH align="right" nowrap>↳ In KSA</TH>
+                  <TH align="right" nowrap>↳ Soon</TH>
+                  <TH align="right" nowrap>↳ Overdue</TH>
+                  <TH align="right" nowrap>Actions</TH>
                 </tr>
               </THead>
               <TBody>
@@ -269,7 +269,9 @@ export default function SubAgentsPage() {
                             Not yet provided
                           </Badge>
                         ) : (
-                          <span>{agent.contact_person || '—'}</span>
+                          <span className="block max-w-[14rem] truncate" title={agent.contact_person}>
+                            {agent.contact_person || '—'}
+                          </span>
                         )}
                       </TD>
                       <TD>{agent.country || <span className="text-slate-400">Not recorded</span>}</TD>

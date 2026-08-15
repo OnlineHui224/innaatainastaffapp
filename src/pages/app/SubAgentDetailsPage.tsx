@@ -125,8 +125,8 @@ export default function SubAgentDetailsPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <div className="space-y-5">
           <Panel title="Organisation">
             <DataGrid columns={2}>
               <DataRow label="Organisation" className="sm:col-span-2">
@@ -241,11 +241,11 @@ export default function SubAgentDetailsPage() {
                   >
                     <THead>
                       <tr>
-                        <TH>Name</TH>
-                        <TH className="hidden lg:table-cell">Nationality</TH>
-                        <TH className="hidden xl:table-cell">Passport</TH>
-                        <TH numeric>Sched. return</TH>
-                        <TH>Status</TH>
+                        <TH nowrap>Name</TH>
+                        <TH className="hidden lg:table-cell" nowrap>Nationality</TH>
+                        <TH className="hidden xl:table-cell" nowrap>Passport</TH>
+                        <TH numeric nowrap>Sched. return</TH>
+                        <TH nowrap>Status</TH>
                         <TH align="right">
                           <span className="sr-only">Actions</span>
                         </TH>

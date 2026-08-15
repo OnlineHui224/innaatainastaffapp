@@ -67,21 +67,21 @@ export default function LoginPage() {
         </div>
 
         <div className="relative z-10">
-          <Logo variant="badge" imgClassName="h-16 w-16 rounded-md bg-white p-1.5" className="mb-8" />
-          <p className="text-2xs font-bold uppercase tracking-[0.28em] text-gold-300">Inna Ataina Travels</p>
-          <h1 className="mt-3 font-display text-3xl font-extrabold leading-tight text-balance xl:text-4xl">
+          <Logo variant="badge" imgClassName="h-20 w-20 rounded-md bg-white p-2" className="mb-7" />
+          <p className="text-2xs font-bold uppercase tracking-[0.24em] text-gold-300">Inna Ataina Travels</p>
+          <h1 className="mt-2.5 font-display text-[2rem] font-extrabold leading-[1.1] tracking-tight text-balance xl:text-[2.375rem]">
             HajjERP Operations Platform
           </h1>
-          <p className="mt-4 max-w-md text-base leading-relaxed text-white/70">
+          <p className="mt-3.5 max-w-md text-[0.9375rem] leading-relaxed text-white/70">
             The internal control centre for Hajj and Umrah operations — where every pilgrim's position is either
             confirmed by a named officer or clearly marked as derived from a plan.
           </p>
 
-          <div className="mt-9 grid max-w-lg grid-cols-1 gap-px overflow-hidden rounded-md border border-white/10 bg-white/10 sm:grid-cols-2">
+          <div className="mt-8 grid max-w-lg grid-cols-1 gap-px overflow-hidden rounded-md border border-white/10 bg-white/10 sm:grid-cols-2">
             {CAPABILITIES.map((capability) => (
-              <div key={capability.label} className="bg-navy-900/80 px-4 py-3.5">
-                <p className="text-sm font-semibold text-white">{capability.label}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-white/50">{capability.detail}</p>
+              <div key={capability.label} className="bg-navy-900/80 px-3.5 py-3">
+                <p className="text-[0.8125rem] font-semibold leading-snug text-white">{capability.label}</p>
+                <p className="mt-0.5 text-2xs leading-snug text-white/50">{capability.detail}</p>
               </div>
             ))}
           </div>
@@ -99,7 +99,7 @@ export default function LoginPage() {
           <div className="mb-7 text-center lg:hidden">
             <Logo
               variant="badge"
-              imgClassName="mx-auto h-14 w-14 rounded-md bg-white p-1.5"
+              imgClassName="mx-auto h-16 w-16 rounded-md bg-white p-2"
               className="justify-center"
             />
             <p className="mt-3 font-display text-lg font-extrabold text-navy-900">HajjERP</p>
@@ -107,9 +107,9 @@ export default function LoginPage() {
           </div>
 
           <div className="rounded-lg border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 px-6 py-5">
+            <div className="border-b border-slate-200 px-6 py-4">
               <p className="text-2xs font-bold uppercase tracking-widest text-brand-700">Staff sign in</p>
-              <h2 className="mt-1.5 font-display text-xl font-extrabold text-navy-900">
+              <h2 className="mt-1 font-display text-xl font-extrabold tracking-tight text-navy-900">
                 Operations Control Centre
               </h2>
               <p className="mt-1.5 text-sm text-slate-600">
@@ -117,7 +117,7 @@ export default function LoginPage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5 px-6 py-6" noValidate>
+            <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5" noValidate>
               {error && <Alert tone="critical" title="Sign-in failed">{error}</Alert>}
 
               <Field label="Email" htmlFor="login-email" required>

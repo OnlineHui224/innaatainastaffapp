@@ -39,7 +39,7 @@ export default function LandingPage() {
       <header className="border-b border-white/10">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
-            <Logo variant="badge" imgClassName="h-10 w-10 rounded-md bg-white p-1" />
+            <Logo variant="badge" imgClassName="h-11 w-11 rounded-md bg-white p-1" />
             <div className="leading-tight">
               <p className="font-display text-xs font-bold tracking-wide sm:text-sm">INNA ATAINA TRAVELS</p>
               <p className="text-2xs text-gold-300">HajjERP Operations Platform</p>
@@ -59,13 +59,13 @@ export default function LandingPage() {
         <div className="absolute inset-0 bg-hajj-motif opacity-60" aria-hidden="true" />
         <div className="absolute inset-0 bg-grid-pattern opacity-30" aria-hidden="true" />
 
-        <div className="relative mx-auto flex max-w-6xl flex-col gap-12 px-4 py-14 sm:px-6 lg:flex-row lg:items-start lg:gap-16 lg:px-8 lg:py-20">
+        <div className="relative mx-auto flex max-w-6xl flex-col gap-10 px-4 py-12 sm:px-6 lg:flex-row lg:items-start lg:gap-14 lg:px-8 lg:py-16">
           <div className="lg:w-[52%]">
             <p className="text-2xs font-bold uppercase tracking-[0.28em] text-gold-300">Authorised internal platform</p>
-            <h1 className="mt-4 font-display text-3xl font-extrabold leading-tight text-balance sm:text-4xl">
+            <h1 className="mt-3.5 font-display text-[2rem] font-extrabold leading-[1.1] tracking-tight text-balance sm:text-[2.5rem]">
               Pilgrim Journey Control &amp; Risk Monitoring
             </h1>
-            <p className="mt-5 max-w-xl text-base leading-relaxed text-white/70">
+            <p className="mt-4 max-w-xl text-[0.9375rem] leading-relaxed text-white/70">
               HajjERP is the internal operations platform of Inna Ataina Travels. Access is restricted to
               authorised staff accounts issued by an Administrator.
             </p>
@@ -95,10 +95,10 @@ export default function LandingPage() {
               {CAPABILITY_STATEMENTS.map((statement, index) => (
                 <div
                   key={statement.title}
-                  className={`bg-white/[0.04] px-5 py-4 ${index > 0 ? 'border-t border-white/10' : ''}`}
+                  className={`bg-white/[0.04] px-4 py-3.5 ${index > 0 ? 'border-t border-white/10' : ''}`}
                 >
-                  <h2 className="font-display text-sm font-bold text-white">{statement.title}</h2>
-                  <p className="mt-1.5 text-sm leading-relaxed text-white/55">{statement.detail}</p>
+                  <h2 className="font-display text-[0.8125rem] font-bold uppercase tracking-[0.06em] text-white">{statement.title}</h2>
+                  <p className="mt-1.5 text-[0.8125rem] leading-snug text-white/55">{statement.detail}</p>
                 </div>
               ))}
             </div>

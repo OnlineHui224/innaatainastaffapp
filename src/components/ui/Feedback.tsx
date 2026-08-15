@@ -37,7 +37,7 @@ export function TableSkeleton({ rows = 6, columns = 5 }: { rows?: number; column
 
 export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div role="status" className="flex flex-col items-center justify-center gap-3 py-16">
+    <div role="status" className="flex flex-col items-center justify-center gap-2.5 py-12">
       <span
         className="h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-brand-600"
         aria-hidden="true"
@@ -60,7 +60,7 @@ export function EmptyState({ icon, title, description, action, className, tone =
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-12 text-center',
+        'flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-9 text-center',
         tone === 'positive' ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-300 bg-white',
         className,
       )}
@@ -68,7 +68,7 @@ export function EmptyState({ icon, title, description, action, className, tone =
       {icon && (
         <div
           className={cn(
-            'mb-3 flex h-11 w-11 items-center justify-center rounded-md border',
+            'mb-2.5 flex h-10 w-10 items-center justify-center rounded-md border',
             tone === 'positive'
               ? 'border-emerald-300 bg-white text-emerald-700'
               : 'border-slate-300 bg-slate-50 text-slate-500',
@@ -78,8 +78,8 @@ export function EmptyState({ icon, title, description, action, className, tone =
         </div>
       )}
       <p className="font-display text-sm font-bold text-navy-900">{title}</p>
-      {description && <div className="mt-1.5 max-w-md text-sm text-slate-600">{description}</div>}
-      {action && <div className="mt-4 flex flex-wrap items-center justify-center gap-2">{action}</div>}
+      {description && <div className="mt-1 max-w-md text-[0.8125rem] leading-snug text-slate-600">{description}</div>}
+      {action && <div className="mt-3.5 flex flex-wrap items-center justify-center gap-2">{action}</div>}
     </div>
   );
 }
@@ -95,7 +95,7 @@ export function ReadOnlyNotice({
   return (
     <div
       className={cn(
-        'flex items-start gap-3 rounded-md border border-slate-300 bg-slate-100 px-4 py-3',
+        'flex items-start gap-2.5 rounded-md border border-slate-300 bg-slate-100 px-3.5 py-2.5',
         className,
       )}
     >
@@ -105,7 +105,7 @@ export function ReadOnlyNotice({
       >
         Read only
       </span>
-      <p className="text-sm leading-relaxed text-slate-700">{children}</p>
+      <p className="text-xs leading-snug text-slate-700 sm:text-[0.8125rem]">{children}</p>
     </div>
   );
 }

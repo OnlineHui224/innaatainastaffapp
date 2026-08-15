@@ -363,8 +363,8 @@ export default function PilgrimsPage() {
       )}
 
       {/* Filters — a bar on desktop, a disclosure sheet on small screens */}
-      <div className="mb-5 rounded-lg border border-slate-300 bg-white">
-        <div className="flex flex-col gap-3 p-3 lg:flex-row lg:items-center">
+      <div className="mb-4 rounded-lg border border-slate-300 bg-white">
+        <div className="flex flex-col gap-2.5 p-2.5 lg:flex-row lg:items-center">
           <SearchInput
             label="Search pilgrims"
             value={search}
@@ -496,14 +496,14 @@ export default function PilgrimsPage() {
                       />
                     </TH>
                   )}
-                  <TH>Name</TH>
-                  <TH className="hidden xl:table-cell">Nationality</TH>
-                  <TH className="hidden lg:table-cell">Passport</TH>
-                  <TH numeric>Sched. out</TH>
-                  <TH numeric>Sched. return</TH>
-                  <TH>Status</TH>
-                  <TH className="hidden xl:table-cell">Sub-agent</TH>
-                  <TH align="right">Actions</TH>
+                  <TH nowrap>Name</TH>
+                  <TH className="hidden xl:table-cell" nowrap>Nationality</TH>
+                  <TH className="hidden lg:table-cell" nowrap>Passport</TH>
+                  <TH numeric nowrap>Sched. out</TH>
+                  <TH numeric nowrap>Sched. return</TH>
+                  <TH nowrap>Status</TH>
+                  <TH className="hidden xl:table-cell" nowrap>Sub-agent</TH>
+                  <TH align="right" nowrap>Actions</TH>
                 </tr>
               </THead>
               <TBody>

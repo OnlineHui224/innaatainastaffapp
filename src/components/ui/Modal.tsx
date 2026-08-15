@@ -167,14 +167,14 @@ export function Modal({
         )}
       >
         {critical && <div className="h-1 rounded-t-lg bg-gold-500" aria-hidden="true" />}
-        <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-3.5">
           {icon && <span className="mt-0.5 shrink-0">{icon}</span>}
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="font-display text-base font-bold text-navy-900">
+            <h2 id={titleId} className="font-display text-[0.9375rem] font-bold leading-snug text-navy-900">
               {title}
             </h2>
             {description && (
-              <p id={descriptionId} className="mt-1 text-sm leading-relaxed text-slate-600">
+              <p id={descriptionId} className="mt-1 text-[0.8125rem] leading-snug text-slate-600">
                 {description}
               </p>
             )}
@@ -190,10 +190,10 @@ export function Modal({
           </button>
         </div>
 
-        {children && <div className="max-h-[65vh] overflow-y-auto px-5 py-4 scrollbar-thin">{children}</div>}
+        {children && <div className="max-h-[68vh] overflow-y-auto px-5 py-4 scrollbar-thin">{children}</div>}
 
         {footer && (
-          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3 sm:flex-row sm:items-center sm:justify-end">
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50 px-5 py-2.5 sm:flex-row sm:items-center sm:justify-end">
             {footer}
           </div>
         )}

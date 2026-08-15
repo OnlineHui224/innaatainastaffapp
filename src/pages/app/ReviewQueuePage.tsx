@@ -295,7 +295,7 @@ export default function ReviewQueuePage() {
         </Alert>
       )}
 
-      <div className="mb-5 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white p-3 lg:flex-row lg:items-center">
+      <div className="mb-4 flex flex-col gap-2.5 rounded-lg border border-slate-300 bg-white p-2.5 lg:flex-row lg:items-center">
         <SearchInput
           label="Search the review queue"
           value={search}

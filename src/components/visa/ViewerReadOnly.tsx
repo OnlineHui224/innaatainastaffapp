@@ -1,7 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
-import { FileText, Eye, History, Search } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { FileText } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
+import { formatDate } from '@/lib/priority';
+import { friendlyError } from '@/lib/validation';
+import { Alert } from '@/components/ui/Alert';
+import { EmptyState, ReadOnlyNotice, TableSkeleton } from '@/components/ui/Feedback';
+import { Identifier, SearchInput } from '@/components/ui/Field';
+import { Panel } from '@/components/ui/Panel';
+import { RecordCard, TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
 
 interface VisaLogRow {
   id: string;
@@ -13,127 +20,185 @@ interface VisaLogRow {
   created_at: string;
 }
 
+/**
+ * Viewer surface for the Visa & Contract Logger.
+ *
+ * Viewers get a finished read-only browser of the visa records that exist —
+ * deliberately not the processing workflow with every control disabled.
+ */
 export function ViewerReadOnly() {
   const { profile } = useAuth();
   const [records, setRecords] = useState<VisaLogRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      let q = supabase
+      let request = supabase
         .from('pilgrims')
-        .select('id, full_name, visa_number, passport_number, visa_company, created_at, sub_agents(organisation_name)')
+        .select(
+          'id, full_name, visa_number, passport_number, visa_company, created_at, sub_agents(organisation_name)',
+        )
         .not('visa_number', 'is', null)
         .order('created_at', { ascending: false })
         .limit(50);
 
-      if (query.trim()) {
-        q = q.or(`full_name.ilike.%${query.trim()}%,passport_number.ilike.%${query.trim()}%,visa_number.ilike.%${query.trim()}%`);
+      if (debouncedQuery.trim()) {
+        const q = debouncedQuery.trim();
+        request = request.or(
+          `full_name.ilike.%${q}%,passport_number.ilike.%${q}%,visa_number.ilike.%${q}%`,
+        );
       }
 
-      const { data, error } = await q;
-      if (error) throw error;
+      const { data, error: queryError } = await request;
+      if (queryError) throw queryError;
 
-      const rows: VisaLogRow[] = (data || []).map((r: Record<string, unknown>) => ({
-        id: r.id as string,
-        pilgrim_name: r.full_name as string,
-        visa_number: r.visa_number as string | null,
-        passport_number: r.passport_number as string,
-        agent_name: (r.sub_agents as { organisation_name: string } | null)?.organisation_name ?? null,
-        visa_company: r.visa_company as string | null,
-        created_at: r.created_at as string,
-      }));
-      setRecords(rows);
+      setRecords(
+        (data || []).map((r: Record<string, unknown>) => ({
+          id: r.id as string,
+          pilgrim_name: r.full_name as string,
+          visa_number: r.visa_number as string | null,
+          passport_number: r.passport_number as string,
+          agent_name: (r.sub_agents as { organisation_name: string } | null)?.organisation_name ?? null,
+          visa_company: r.visa_company as string | null,
+          created_at: r.created_at as string,
+        })),
+      );
     } catch (e) {
-      console.error('Failed to load visa records:', e);
+      setError(friendlyError(e));
+      setRecords([]);
     } finally {
       setLoading(false);
     }
-  }, [query]);
+  }, [debouncedQuery]);
 
   useEffect(() => {
     fetchRecords();
   }, [fetchRecords]);
 
-  function formatDate(iso: string): string {
-    return new Date(iso).toLocaleDateString('en-GB', {
-      day: 'numeric', month: 'short', year: 'numeric',
-    });
-  }
-
   return (
-    <div className="space-y-6">
-      {/* Read-only banner */}
-      <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4">
-        <Eye className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-semibold text-blue-900">Read-Only Access</p>
-          <p className="mt-0.5 text-sm text-blue-700">
-            You have viewer access. You can browse visa records but cannot upload, extract, edit, or confirm.
-            Contact an administrator if you need processing access.
-          </p>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <ReadOnlyNotice>
+        You have Viewer access. You can browse every saved visa record here, but uploading documents, extracting
+        values, verifying them and saving are not available for your role. Contact an Administrator if you need
+        processing access.
+      </ReadOnlyNotice>
 
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-        <input
-          type="text"
+      <div className="rounded-lg border border-slate-300 bg-white p-2.5">
+        <SearchInput
+          label="Search visa records"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by pilgrim name, passport, or visa number..."
-          className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition-all"
+          onValueChange={setQuery}
+          placeholder="Search by pilgrim name, passport or visa number…"
+          className="max-w-xl"
         />
       </div>
 
-      {/* Records table */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-slate-500" />
-            <h3 className="font-display font-bold text-base text-navy-900">Visa Records</h3>
-          </div>
-        </div>
+      {error && (
+        <Alert tone="critical" title="Visa records could not be loaded">
+          {error}
+        </Alert>
+      )}
+
+      <Panel
+        title="Saved visa records"
+        description={`Showing the ${records.length} most recent ${records.length === 1 ? 'record' : 'records'} with a visa number on file.`}
+        bodyClassName="p-0"
+      >
         {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-8 w-8 rounded-full border-3 border-slate-200 border-t-brand-500 animate-spin" />
+          <div className="p-4">
+            <TableSkeleton rows={6} columns={5} />
           </div>
         ) : records.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <FileText className="h-10 w-10 text-slate-300 mb-2" />
-            <p className="text-sm text-slate-400">No visa records found</p>
+          <div className="p-5">
+            <EmptyState
+              icon={<FileText className="h-5 w-5" aria-hidden="true" />}
+              title={query ? 'No visa records match this search' : 'No visa records yet'}
+              description={
+                query
+                  ? 'Clear the search to see all saved visa records.'
+                  : 'Visa records appear here once an operations officer has reviewed and saved one.'
+              }
+            />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/50">
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Pilgrim</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Passport</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Visa No.</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Agent</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {records.map((row) => (
-                  <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-5 py-3 text-sm font-medium text-slate-800">{row.pilgrim_name}</td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{row.passport_number}</td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{row.visa_number || '—'}</td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{row.agent_name || '—'}</td>
-                    <td className="px-5 py-3 text-sm text-slate-400">{formatDate(row.created_at)}</td>
+          <>
+            <div className="hidden md:block">
+              <TableFrame caption="Saved visa records" className="rounded-none border-0">
+                <THead>
+                  <tr>
+                    <TH nowrap>Pilgrim</TH>
+                    <TH nowrap>Passport</TH>
+                    <TH nowrap>Visa number</TH>
+                    <TH className="hidden lg:table-cell" nowrap>Agent</TH>
+                    <TH className="hidden lg:table-cell" nowrap>Visa company</TH>
+                    <TH numeric nowrap>Recorded</TH>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </THead>
+                <TBody>
+                  {records.map((row) => (
+                    <TR key={row.id}>
+                      <TD className="font-semibold text-slate-900">{row.pilgrim_name}</TD>
+                      <TD>
+                        <Identifier value={row.passport_number} />
+                      </TD>
+                      <TD>
+                        <Identifier value={row.visa_number} />
+                      </TD>
+                      <TD className="hidden lg:table-cell">{row.agent_name || 'Unassigned'}</TD>
+                      <TD className="hidden lg:table-cell">{row.visa_company || '—'}</TD>
+                      <TD numeric className="whitespace-nowrap">
+                        {formatDate(row.created_at.slice(0, 10))}
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </TableFrame>
+            </div>
+
+            <div className="space-y-3 p-4 md:hidden">
+              {records.map((row) => (
+                <RecordCard key={row.id}>
+                  <p className="font-semibold text-slate-900">{row.pilgrim_name}</p>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <dt className="text-2xs uppercase tracking-wide text-slate-500">Passport</dt>
+                      <dd>
+                        <Identifier value={row.passport_number} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-2xs uppercase tracking-wide text-slate-500">Visa number</dt>
+                      <dd>
+                        <Identifier value={row.visa_number} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-2xs uppercase tracking-wide text-slate-500">Agent</dt>
+                      <dd className="text-slate-800">{row.agent_name || 'Unassigned'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-2xs uppercase tracking-wide text-slate-500">Recorded</dt>
+                      <dd className="text-slate-800">{formatDate(row.created_at.slice(0, 10))}</dd>
+                    </div>
+                  </dl>
+                </RecordCard>
+              ))}
+            </div>
+          </>
         )}
-      </div>
-      <p className="text-xs text-slate-400 text-center">Logged in as: {profile?.full_name || 'Viewer'}</p>
+      </Panel>
+
+      <p className="text-xs text-slate-500">Signed in as {profile?.full_name || 'Viewer'}.</p>
     </div>
   );
 }

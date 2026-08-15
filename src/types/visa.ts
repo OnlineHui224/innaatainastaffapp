@@ -139,6 +139,21 @@ export interface ExtractedField<T = string> {
   confidence: 'high' | 'medium' | 'low' | null;
   sourcePage: number | null;
   needsReview: boolean;
+  /**
+   * Explicit human verification.
+   *
+   * Typing into a field NEVER sets this. Only the officer pressing "Verify this
+   * value" promotes a field to verified, and editing an already-verified value
+   * clears it again. See `verifyField` / `editFieldValue` below.
+   */
+  verified: boolean;
+  verifiedAt: string | null;
+  verifiedById: string | null;
+  verifiedByName: string | null;
+  /** True once an officer has changed the value the extractor produced. */
+  edited: boolean;
+  /** The value the extractor originally produced, kept for the audit trail. */
+  originalValue: T | null;
 }
 
 export interface VisaExtractionResult {
@@ -148,6 +163,84 @@ export interface VisaExtractionResult {
   nationality: ExtractedField;
   extractedAt: string;
 }
+
+/** Keys of `VisaExtractionResult` that hold an extracted field. */
+export type ExtractedFieldKey = 'passengerName' | 'passportNumber' | 'visaNumber' | 'nationality';
+
+export const EXTRACTED_FIELD_KEYS: ExtractedFieldKey[] = [
+  'passengerName',
+  'passportNumber',
+  'visaNumber',
+  'nationality',
+];
+
+export function emptyExtractedField(): ExtractedField {
+  return {
+    value: null,
+    confidence: null,
+    sourcePage: null,
+    needsReview: false,
+    verified: false,
+    verifiedAt: null,
+    verifiedById: null,
+    verifiedByName: null,
+    edited: false,
+    originalValue: null,
+  };
+}
+
+/**
+ * Records an officer's edit to an extracted value.
+ *
+ * The edit is stored, `edited` is set, and — critically — any prior verification
+ * is cleared. Changing a value is not the same as reviewing it.
+ */
+export function editFieldValue(field: ExtractedField, nextValue: string): ExtractedField {
+  return {
+    ...field,
+    value: nextValue,
+    edited: nextValue !== (field.originalValue ?? ''),
+    verified: false,
+    verifiedAt: null,
+    verifiedById: null,
+    verifiedByName: null,
+  };
+}
+
+/** Promotes a field to verified. This is the ONLY path to `verified: true`. */
+export function verifyField(
+  field: ExtractedField,
+  officer: { id: string | null; name: string },
+): ExtractedField {
+  return {
+    ...field,
+    verified: true,
+    verifiedAt: new Date().toISOString(),
+    verifiedById: officer.id,
+    verifiedByName: officer.name,
+  };
+}
+
+/** Clears a verification without changing the value. */
+export function unverifyField(field: ExtractedField): ExtractedField {
+  return {
+    ...field,
+    verified: false,
+    verifiedAt: null,
+    verifiedById: null,
+    verifiedByName: null,
+  };
+}
+
+// ── Four-stage provenance ladder ──
+export type CaseStage = 'ai_extracted' | 'human_reviewed' | 'matched' | 'saved';
+
+export const CASE_STAGE_LABELS: Record<CaseStage, string> = {
+  ai_extracted: 'AI Extracted',
+  human_reviewed: 'Human Reviewed',
+  matched: 'Matched to HajjERP',
+  saved: 'Saved',
+};
 
 export type MatchStatus =
   | 'exact_passport_match'
@@ -197,15 +290,25 @@ export interface VisaLogEntry {
 
 export const EXTRACTION_STATUS_MESSAGES: Record<ExtractionStatus, string> = {
   idle: '',
-  securing: 'Securing document...',
-  uploading: 'Uploading to extraction service...',
-  extracting: 'Extracting visa details with AI...',
-  matching: 'Searching for pilgrim match...',
-  checking_duplicates: 'Checking for duplicate records...',
-  preparing_review: 'Preparing review screen...',
+  securing: 'Securing document',
+  uploading: 'Reading visa',
+  extracting: 'Extracting information',
+  matching: 'Searching HajjERP',
+  checking_duplicates: 'Checking conflicts',
+  preparing_review: 'Preparing review',
   complete: 'Extraction complete',
   error: 'Extraction failed',
 };
+
+/** The staged progress an operator sees while a document is processed. */
+export const EXTRACTION_STAGES: ExtractionStatus[] = [
+  'securing',
+  'uploading',
+  'extracting',
+  'matching',
+  'checking_duplicates',
+  'preparing_review',
+];
 
 export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   exact_passport_match: 'Exact passport match',

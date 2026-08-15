@@ -36,7 +36,7 @@ export function useHotelSearch(city: 'Makkah' | 'Madinah'): UseHotelSearchResult
           // ilike is case-insensitive in Postgres.
           // Search across name_en, name_ar, licence_number, district.
           // City filter is always applied so Makkah never returns Madinah.
-          const { data, err } = await supabase
+          const { data, error: err } = await supabase
             .from('hotel_references')
             .select('id, city, name_en, name_ar, classification, licence_number, district, is_active, source')
             .eq('city', city)

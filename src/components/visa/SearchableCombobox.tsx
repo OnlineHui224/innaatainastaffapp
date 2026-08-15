@@ -18,7 +18,8 @@ interface SearchableComboboxProps {
   emptyMessage?: string;
   onSearchChange?: (query: string) => void;
   disabled?: boolean;
-  error?: string;
+  /** Marks the control as invalid. Pairs with a visible message rendered by the caller. */
+  error?: boolean;
   icon?: typeof Search;
 }
 
@@ -108,11 +109,26 @@ export function SearchableCombobox({
   return (
     <div ref={containerRef} className="relative">
       <div
+        role="combobox"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-disabled={disabled || undefined}
+        aria-invalid={error || undefined}
+        tabIndex={open || disabled ? -1 : 0}
         onClick={() => !disabled && setOpen(true)}
+        onKeyDown={(e) => {
+          /* Keyboard parity with the mouse: the closed control opens on
+             Enter, Space or ArrowDown, then hands focus to its search input. */
+          if (disabled || open) return;
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
         className={cn(
-          'flex items-center gap-2 rounded-xl border bg-white px-3 py-2.5 cursor-pointer transition-all',
+          'flex items-center gap-2 rounded-md border bg-white px-3 py-2.5 cursor-pointer transition-colors',
           disabled && 'opacity-50 cursor-not-allowed bg-slate-50',
-          error ? 'border-red-400 ring-1 ring-red-100' : 'border-slate-200',
+          error ? 'border-red-400 ring-1 ring-red-100' : 'border-slate-300',
           !disabled && !error && 'hover:border-slate-300',
           open && !disabled && !error && 'border-brand-400 ring-2 ring-brand-100',
           open && !disabled && error && 'border-red-400 ring-2 ring-red-100',
@@ -128,7 +144,7 @@ export function SearchableCombobox({
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            className="flex-1 min-w-0 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none"
+            className="flex-1 min-w-0 bg-transparent text-sm text-slate-900 placeholder:text-slate-400"
             disabled={disabled}
           />
         ) : (
@@ -158,7 +174,7 @@ export function SearchableCombobox({
       </div>
 
       {open && !disabled && (
-        <div className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl scrollbar-thin">
+        <div className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded-md border border-slate-300 bg-white shadow-xl scrollbar-thin">
           {loading ? (
             <div className="flex items-center justify-center gap-2 px-4 py-6 text-sm text-slate-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Searching...

@@ -15,6 +15,11 @@ export async function logAudit(params: {
   performedByName?: string | null;
 }): Promise<void> {
   try {
+    // The actor is always taken from the live session, never from the caller's
+    // arguments, so an entry cannot be attributed to somebody else.
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
     await supabase.from('audit_log').insert({
       action: params.action,
       record_type: params.recordType,
@@ -22,7 +27,7 @@ export async function logAudit(params: {
       record_label: params.recordLabel,
       previous_value: params.previousValue ?? null,
       new_value: params.newValue ?? null,
-      performed_by: params.performedBy ?? null,
+      performed_by: user.id,
       performed_by_name: params.performedByName ?? '',
     });
   } catch (err) {

@@ -198,7 +198,7 @@ async function getActorProfile(
 
     return {
       success: false,
-      error: `Profile lookup failed: ${profileError.message}`,
+      error: "Your staff profile could not be loaded. Please try again.",
       status: 500,
     };
   }
@@ -408,11 +408,11 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        if (password.length < 6) {
+        if (password.length < 12) {
           return json(
             {
               error:
-                "Temporary password must contain at least 6 characters.",
+                "Temporary password must contain at least 12 characters.",
             },
             400,
           );
@@ -531,9 +531,8 @@ if (existingProfileError || !existingProfile) {
 
   return json(
     {
-      error: existingProfileError
-        ? `The authentication account was created, but the new staff profile could not be read: ${existingProfileError.message}`
-        : "The authentication account was created, but its staff profile was not created. The incomplete account was rolled back.",
+      error:
+        "The account could not be completed and the incomplete account was rolled back. Please try again.",
     },
     500,
   );
@@ -659,9 +658,8 @@ if (profileUpdateError || !completedProfile) {
 
   return json(
     {
-      error: profileUpdateError
-        ? `Staff profile update failed: ${profileUpdateError.message}`
-        : "The staff profile could not be completed. The incomplete account was rolled back.",
+      error:
+        "The staff profile could not be completed and the incomplete account was rolled back. Please try again.",
     },
     500,
   );
@@ -716,11 +714,11 @@ if (profileUpdateError || !completedProfile) {
           );
         }
 
-        if (newPassword.length < 6) {
+        if (newPassword.length < 12) {
           return json(
             {
               error:
-                "Password must contain at least 6 characters.",
+                "Password must contain at least 12 characters.",
             },
             400,
           );
@@ -1032,5 +1030,8 @@ function friendlyAuthError(
     return "Your administrator session has expired. Please sign in again.";
   }
 
-  return message;
+  // Never echo the raw provider or database message back to the browser: it
+  // discloses schema, constraint and policy detail.
+  console.error("Unmapped auth error:", message);
+  return "The request could not be completed. Please try again.";
 }

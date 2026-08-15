@@ -22,10 +22,13 @@ import type { JSX } from 'react';
 
 function LoadingScreen() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-navy-950">
+    <div className="flex min-h-screen items-center justify-center bg-navy-950" role="status">
       <div className="text-center">
-        <div className="inline-block h-10 w-10 rounded-full border-4 border-white/10 border-t-gold-400 animate-spin" />
-        <p className="mt-4 text-sm text-white/60">Loading platform...</p>
+        <span
+          className="inline-block h-9 w-9 animate-spin rounded-full border-2 border-white/15 border-t-gold-400"
+          aria-hidden="true"
+        />
+        <p className="mt-4 text-sm text-white/60">Loading platform…</p>
       </div>
     </div>
   );
@@ -44,6 +47,21 @@ function AdminRoute({ children }: { children: JSX.Element }) {
   if (!session) return <Navigate to="/login" replace />;
   if (!canManageStaff) return <Navigate to="/app/dashboard" replace />;
   void profile;
+  return children;
+}
+
+/**
+ * Gates routes that exist only to write operational records.
+ *
+ * Viewers have read access to every operational module but must not reach a
+ * create/edit/import/review surface by typing its URL. This reuses the existing
+ * `canEditPilgrims` permission — no new RBAC model is introduced.
+ */
+function EditorRoute({ children }: { children: JSX.Element }) {
+  const { session, loading, canEditPilgrims } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (!session) return <Navigate to="/login" replace />;
+  if (!canEditPilgrims) return <Navigate to="/app/dashboard" replace />;
   return children;
 }
 
@@ -68,16 +86,66 @@ export default function App() {
             <Route index element={<Navigate to="/app/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="pilgrims" element={<PilgrimsPage />} />
-            <Route path="pilgrims/new" element={<PilgrimFormPage />} />
+            <Route
+              path="pilgrims/new"
+              element={
+                <EditorRoute>
+                  <PilgrimFormPage />
+                </EditorRoute>
+              }
+            />
             <Route path="pilgrims/:id" element={<PilgrimDetailsPage />} />
-            <Route path="pilgrims/:id/edit" element={<PilgrimFormPage />} />
-            <Route path="pilgrims/import" element={<ImportPilgrimsPage />} />
-            <Route path="pilgrims/import-csv" element={<ImportCsvPage />} />
-            <Route path="pilgrims/review-queue" element={<ReviewQueuePage />} />
+            <Route
+              path="pilgrims/:id/edit"
+              element={
+                <EditorRoute>
+                  <PilgrimFormPage />
+                </EditorRoute>
+              }
+            />
+            {/* Specialised Verified Import — URL-only, never in sidebar navigation */}
+            <Route
+              path="pilgrims/import"
+              element={
+                <EditorRoute>
+                  <ImportPilgrimsPage />
+                </EditorRoute>
+              }
+            />
+            <Route
+              path="pilgrims/import-csv"
+              element={
+                <EditorRoute>
+                  <ImportCsvPage />
+                </EditorRoute>
+              }
+            />
+            <Route
+              path="pilgrims/review-queue"
+              element={
+                <EditorRoute>
+                  <ReviewQueuePage />
+                </EditorRoute>
+              }
+            />
             <Route path="sub-agents" element={<SubAgentsPage />} />
-            <Route path="sub-agents/new" element={<SubAgentFormPage />} />
+            <Route
+              path="sub-agents/new"
+              element={
+                <EditorRoute>
+                  <SubAgentFormPage />
+                </EditorRoute>
+              }
+            />
             <Route path="sub-agents/:id" element={<SubAgentDetailsPage />} />
-            <Route path="sub-agents/:id/edit" element={<SubAgentFormPage />} />
+            <Route
+              path="sub-agents/:id/edit"
+              element={
+                <EditorRoute>
+                  <SubAgentFormPage />
+                </EditorRoute>
+              }
+            />
             <Route path="visa-logger" element={<VisaLoggerPage />} />
             <Route
               path="hotel-import"

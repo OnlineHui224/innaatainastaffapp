@@ -1,20 +1,26 @@
 import { useState, useCallback, useRef } from 'react';
-import {
-  UploadCloud,
-  FileText,
-  Table,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  Building,
-  XCircle,
-  ChevronRight,
-} from 'lucide-react';
+import { CheckCircle2, FileText, UploadCloud } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { logAudit } from '@/lib/audit';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { PageHeader } from '@/components/PageHeader';
+import { Alert } from '@/components/ui/Alert';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Identifier } from '@/components/ui/Field';
+import { LoadingBlock } from '@/components/ui/Feedback';
+import { Panel } from '@/components/ui/Panel';
+import { TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
+import { ImportStages, OutcomeTile } from '@/components/imports/ImportStages';
 import { cn } from '@/lib/utils';
+
+const HOTEL_STAGES = [
+  { key: 'upload', label: 'Upload file' },
+  { key: 'parse', label: 'Parse & match' },
+  { key: 'confirm', label: 'Confirm & import' },
+  { key: 'result', label: 'Result' },
+];
 
 interface ParsedHotel {
   id?: string;
@@ -302,194 +308,236 @@ export default function HotelImportPage() {
     }
   }, [summary, parsedHotels, profile]);
 
-  const summaryCards = summary ? [
-    { label: 'Total Rows', value: summary.totalRows, icon: Table, color: 'text-slate-700' },
-    { label: 'Makkah', value: summary.makkahCount, icon: Building, color: 'text-brand-700' },
-    { label: 'Madinah', value: summary.madinahCount, icon: Building, color: 'text-brand-700' },
-    { label: 'New Hotels', value: summary.newHotels, icon: CheckCircle2, color: 'text-green-700' },
-    { label: 'Existing Matched', value: summary.existingMatched, icon: Table, color: 'text-blue-700' },
-    { label: 'Duplicate IDs', value: summary.duplicateIds, icon: AlertCircle, color: 'text-amber-700' },
-    { label: 'Duplicate Names', value: summary.duplicateNames, icon: AlertCircle, color: 'text-amber-700' },
-    { label: 'Invalid Records', value: summary.invalidRecords, icon: XCircle, color: 'text-red-700' },
-  ] : [];
+
+  const stageIndex = result ? 3 : summary ? 2 : parsing ? 1 : 0;
 
   return (
-    <div className="max-w-[1200px] mx-auto">
-      <div className="mb-6">
-        <nav className="text-xs text-slate-400 mb-2" aria-label="Breadcrumb">
-          <span>Automation Settings</span>
-          <ChevronRight className="inline h-3 w-3 mx-1" />
-          <span className="text-slate-600 font-medium">Hotel Reference Import</span>
-        </nav>
-        <h1 className="font-display font-bold text-2xl text-navy-900">Hotel Reference Import</h1>
-        <p className="mt-1 text-sm text-slate-500 max-w-2xl">
-          Import hotel reference data from CSV files. Existing hotels are matched by Hotel ID, licence number, or normalized name. New hotels are added without deleting current records.
-        </p>
-      </div>
+    <div>
+      <PageHeader
+        eyebrow="Administration"
+        title="Hotel Reference Import"
+        subtitle="Import Makkah and Madinah hotel reference data from a CSV file. Rows are matched to existing hotels by Hotel ID, licence number, or normalised name and city."
+      />
+
+      <ImportStages stages={HOTEL_STAGES} currentIndex={stageIndex} className="mb-6" />
 
       {error && (
-        <div className="mb-4 flex items-start gap-2.5 rounded-xl border bg-red-50 border-red-200 px-4 py-3">
-          <XCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
-          <p className="text-sm text-red-800 flex-1">{error}</p>
-        </div>
+        <Alert tone="critical" title="This file could not be used" className="mb-5" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
       )}
 
       {result && (
-        <div className="mb-4 flex items-start gap-2.5 rounded-xl border bg-green-50 border-green-200 px-4 py-3">
-          <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0 mt-0.5" />
-          <div className="text-sm text-green-800">
-            <p className="font-semibold">Import complete: {result.added} hotels added, {result.updated} hotels updated.</p>
-            <p className="text-green-700 mt-0.5">Existing hotel records that were absent from this file were not deleted.</p>
-          </div>
-        </div>
+        <Alert tone="success" title="Import complete" className="mb-5">
+          <span className="tabular-nums font-semibold">{result.added}</span> hotels added and{' '}
+          <span className="tabular-nums font-semibold">{result.updated}</span> hotels updated.
+          {/* Stated accurately: this import inserts and updates. It never deletes. */}
+          <span className="mt-1 block">
+            This import only inserts and updates. Hotel records that were absent from this file were left
+            untouched — nothing was deleted.
+          </span>
+        </Alert>
       )}
 
-      {/* Upload area */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm mb-6">
-        <div className="px-6 py-5 border-b border-slate-100">
-          <h3 className="font-display font-bold text-base text-navy-900">Upload CSV File</h3>
-          <p className="mt-0.5 text-xs text-slate-500">Accepted columns: id, city, name_en, name_ar, classification, licence_number, district</p>
-        </div>
-        <div className="px-6 py-5">
-          <div
-            onClick={() => !parsing && fileInputRef.current?.click()}
-            className={cn(
-              'flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 hover:border-slate-300 hover:bg-slate-50 py-10 px-6 cursor-pointer transition-all',
-              parsing && 'opacity-50 cursor-not-allowed',
-            )}
-          >
-            {parsing ? (
-              <Loader2 className="h-10 w-10 text-brand-500 animate-spin" />
-            ) : (
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
-                <UploadCloud className="h-6 w-6" />
-              </div>
-            )}
-            <div className="text-center">
-              <p className="text-sm font-semibold text-slate-700">
-                {parsing ? 'Parsing file...' : 'Drop or choose a CSV file to import'}
-              </p>
-              <p className="mt-1 text-xs text-slate-400">No code rebuild required — new files are processed at upload time</p>
-            </div>
+      <Panel
+        title="Upload CSV file"
+        description="Accepted columns: id, city, name_en, name_ar, classification, licence_number, district."
+        className="mb-6"
+      >
+        <div
+          onClick={() => !parsing && fileInputRef.current?.click()}
+          onDrop={(e) => {
+            e.preventDefault();
+            const f = e.dataTransfer.files?.[0];
+            if (f && !parsing) handleFile(f);
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          className={cn(
+            'flex cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-slate-300 px-6 py-10 transition-colors hover:border-brand-500 hover:bg-brand-50/30',
+            parsing && 'cursor-not-allowed opacity-60',
+          )}
+        >
+          <div className="flex h-11 w-11 items-center justify-center rounded-md border border-slate-300 bg-slate-50 text-slate-500">
+            <UploadCloud className="h-5 w-5" aria-hidden="true" />
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleFile(f);
-            }}
-          />
+          <div className="text-center">
+            <p className="font-display text-sm font-bold text-navy-900">
+              {parsing ? 'Parsing file…' : 'Drop a CSV file here, or choose one'}
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              Files are processed at upload time — no rebuild or deployment is needed.
+            </p>
+          </div>
         </div>
-      </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="sr-only"
+          aria-label="Choose a hotel reference CSV file"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFile(f);
+          }}
+        />
+      </Panel>
 
-      {/* Summary cards */}
-      {summary && (
-        <>
-          <div className="mb-6">
-            <div className="flex items-center gap-2 mb-3">
-              <FileText className="h-4 w-4 text-slate-500" />
-              <span className="text-sm font-semibold text-slate-700">{summary.filename}</span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {summaryCards.map((card) => {
-                const Icon = card.icon;
-                return (
-                  <div key={card.label} className="rounded-xl border border-slate-200 bg-white p-3">
-                    <div className="flex items-center gap-1.5">
-                      <Icon className={cn('h-3.5 w-3.5', card.color)} />
-                      <span className="text-xs text-slate-500 font-medium">{card.label}</span>
-                    </div>
-                    <p className={cn('text-xl font-bold mt-1', card.color)}>{card.value}</p>
-                  </div>
-                );
-              })}
-            </div>
+      {parsing && <LoadingBlock label="Parsing and matching hotel rows…" />}
+
+      {summary && !parsing && (
+        <div className="space-y-6">
+          <div className="flex items-center gap-2 text-sm">
+            <FileText className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+            <span className="font-semibold text-slate-900">{summary.filename}</span>
           </div>
 
-          {/* Preview table */}
+          {/* The real summary this workflow produces. There is no "needs review"
+              status in the hotel import — inventing one would misdescribe it. */}
+          <section aria-labelledby="hotel-summary">
+            <h2
+              id="hotel-summary"
+              className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+            >
+              Parse summary
+            </h2>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <OutcomeTile label="Total rows" value={summary.totalRows} tone="neutral" description="Found in the file" />
+              <OutcomeTile label="Makkah" value={summary.makkahCount} tone="info" />
+              <OutcomeTile label="Madinah" value={summary.madinahCount} tone="info" />
+              <OutcomeTile label="New" value={summary.newHotels} tone="ready" description="Will be inserted" />
+              <OutcomeTile
+                label="Existing matched"
+                value={summary.existingMatched}
+                tone="ready"
+                description="Will be updated"
+              />
+              <OutcomeTile
+                label="Duplicate IDs"
+                value={summary.duplicateIds}
+                tone="blocked"
+                description="Repeated within this file"
+              />
+              <OutcomeTile
+                label="Duplicate names"
+                value={summary.duplicateNames}
+                tone="blocked"
+                description="Same name and city in this file"
+              />
+              <OutcomeTile
+                label="Invalid"
+                value={summary.invalidRecords}
+                tone="blocked"
+                description="Missing name or city"
+              />
+            </div>
+          </section>
+
           {parsedHotels.length > 0 && (
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-6">
-              <div className="px-5 py-4 border-b border-slate-100">
-                <h3 className="font-display font-bold text-base text-navy-900">Preview ({parsedHotels.length} rows)</h3>
-              </div>
-              <div className="overflow-x-auto max-h-96 scrollbar-thin">
-                <table className="w-full">
-                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-100">
+            <section aria-labelledby="hotel-preview">
+              <h2
+                id="hotel-preview"
+                className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+              >
+                Preview ({parsedHotels.length} rows)
+              </h2>
+
+              <p className="rounded-lg border border-slate-300 bg-white p-4 text-sm text-slate-700 lg:hidden">
+                <span className="font-semibold tabular-nums">{summary.newHotels}</span> new and{' '}
+                <span className="font-semibold tabular-nums">{summary.toUpdate}</span> existing hotel rows are
+                ready. Open this page on a larger screen to inspect the full row list.
+              </p>
+
+              <div className="hidden lg:block">
+                <TableFrame caption="Parsed hotel reference rows">
+                  <THead>
                     <tr>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500">Row</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500">City</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500">Hotel Name</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500">Licence</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500">Match</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500">Status</th>
+                      <TH numeric nowrap>Row</TH>
+                      <TH nowrap>City</TH>
+                      <TH nowrap>Hotel name</TH>
+                      <TH nowrap>Licence</TH>
+                      <TH nowrap>Match</TH>
+                      <TH nowrap>Status</TH>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
+                  </THead>
+                  <TBody>
                     {parsedHotels.slice(0, 100).map((h) => (
-                      <tr key={h.rowNumber} className="hover:bg-slate-50/50">
-                        <td className="px-4 py-2 text-xs text-slate-400">{h.rowNumber}</td>
-                        <td className="px-4 py-2 text-sm text-slate-700">{h.city}</td>
-                        <td className="px-4 py-2 text-sm font-medium text-slate-800">{h.name_en}</td>
-                        <td className="px-4 py-2 text-sm text-slate-600">{h.licence_number || '—'}</td>
-                        <td className="px-4 py-2 text-xs">
+                      <TR key={h.rowNumber}>
+                        <TD numeric className="text-xs text-slate-500">
+                          {h.rowNumber}
+                        </TD>
+                        <TD>{h.city || <span className="text-slate-400">Missing</span>}</TD>
+                        <TD className="font-medium text-slate-900">
+                          {h.name_en || <span className="italic text-red-700">(name missing)</span>}
+                        </TD>
+                        <TD>
+                          {/* Licence number is a genuine operational identifier */}
+                          <Identifier value={h.licence_number} />
+                        </TD>
+                        <TD>
                           {h.matchType === 'update_existing' ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 text-blue-700 px-2 py-0.5 font-medium">
-                              {h.matchField}
-                            </span>
+                            <Badge tone="info">{h.matchField || 'Matched'}</Badge>
                           ) : (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-green-50 text-green-700 px-2 py-0.5 font-medium">
+                            <Badge tone="positive" treatment="solid">
                               New
+                            </Badge>
+                          )}
+                        </TD>
+                        <TD>
+                          {h.errors.length > 0 ? (
+                            <span className="text-xs text-red-800">{h.errors.join(', ')}</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-xs text-emerald-800">
+                              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              Ready
                             </span>
                           )}
-                        </td>
-                        <td className="px-4 py-2 text-xs">
-                          {h.errors.length > 0 ? (
-                            <span className="text-red-600">{h.errors.join(', ')}</span>
-                          ) : (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                          )}
-                        </td>
-                      </tr>
+                        </TD>
+                      </TR>
                     ))}
-                  </tbody>
-                </table>
+                  </TBody>
+                </TableFrame>
+                {parsedHotels.length > 100 && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Showing the first 100 of {parsedHotels.length} rows. All valid rows will be imported.
+                  </p>
+                )}
               </div>
-              {parsedHotels.length > 100 && (
-                <div className="px-4 py-2 text-xs text-slate-400 text-center bg-slate-50 border-t border-slate-100">
-                  Showing first 100 of {parsedHotels.length} rows
-                </div>
-              )}
-            </div>
+            </section>
           )}
 
-          {/* Import action */}
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-500">
-              {summary.newHotels} new + {summary.toUpdate} updates = {summary.newHotels + summary.toUpdate} records to import
+          <div className="sticky bottom-0 z-10 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white/95 p-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-700">
+              <span className="font-bold tabular-nums text-emerald-900">{summary.newHotels}</span> new +{' '}
+              <span className="font-bold tabular-nums text-brand-900">{summary.toUpdate}</span> updates ={' '}
+              <span className="font-bold tabular-nums">{summary.newHotels + summary.toUpdate}</span> records to
+              import
             </p>
-            <button
+            <Button
               onClick={() => setConfirmOpen(true)}
-              disabled={importing || (summary.newHotels + summary.toUpdate) === 0}
-              className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-all disabled:opacity-40"
+              loading={importing}
+              disabled={summary.newHotels + summary.toUpdate === 0}
+              icon={<CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
             >
-              {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Confirm and Import
-            </button>
+              Confirm and import
+            </Button>
           </div>
-        </>
+        </div>
       )}
 
       <ConfirmDialog
         open={confirmOpen}
-        title="Confirm Hotel Reference Import"
-        message={`This will add ${summary?.newHotels ?? 0} new hotels and update ${summary?.toUpdate ?? 0} existing hotels. Hotels absent from this file will not be deleted. Do you want to proceed?`}
-        confirmLabel="Confirm Import"
-        onConfirm={handleImport}
-        onCancel={() => setConfirmOpen(false)}
+        title="Confirm hotel reference import"
+        confirmLabel={`Import ${(summary?.newHotels ?? 0) + (summary?.toUpdate ?? 0)} Hotel Records`}
         loading={importing}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={handleImport}
+        message={
+          <>
+            This adds <strong className="tabular-nums">{summary?.newHotels ?? 0}</strong> new hotels and updates{' '}
+            <strong className="tabular-nums">{summary?.toUpdate ?? 0}</strong> existing hotels. Hotels that are
+            absent from this file are not deleted — this import only inserts and updates.
+          </>
+        }
       />
     </div>
   );

@@ -53,6 +53,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (!data) return null;
 
+    // A suspended account must not keep an active session, even if the browser
+    // still holds a valid token.
+    if (data.is_active === false) {
+      await supabase.auth.signOut();
+      return null;
+    }
+
     const email = session?.user?.email ?? '';
     return {
       ...data,
@@ -107,9 +114,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (email: string, password: string): Promise<{ error: string | null }> => {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) return { error: error.message };
-      // Record last login
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
+        // Refuse the session outright if the account has been suspended.
+        const { data: activeCheck } = await supabase
+          .from('profiles')
+          .select('is_active')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (activeCheck && activeCheck.is_active === false) {
+          await supabase.auth.signOut();
+          return { error: 'This account has been suspended. Please contact an administrator.' };
+        }
+
+        // Record last login
         await supabase.from('profiles').update({ last_login_at: new Date().toISOString() }).eq('id', user.id);
       }
       return { error: null };

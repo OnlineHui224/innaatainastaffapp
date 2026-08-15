@@ -3,13 +3,46 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Semantic operational tones. Every tone is paired with text in the UI —
+       colour is never the only carrier of meaning. */
+    --tone-confirmed: 46 109 168; /* brand-500  — human-confirmed */
+    --tone-derived: 100 116 139; /* slate-500  — system-derived */
+    --tone-positive: 4 120 87; /* emerald-700 */
+    --tone-caution: 180 83 9; /* amber-700 */
+    --tone-critical: 185 28 28; /* red-700 */
+  }
+
   html {
     scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
   }
+
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    color: theme('colors.slate.800');
+    background-color: theme('colors.slate.100');
+  }
+
+  /* Approved focus treatment: a single, always-visible, high-contrast ring.
+     Never suppress this with outline-none unless an equivalent ring replaces it. */
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid theme('colors.brand.600');
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Native controls inherit the platform accent so checkboxes/radios stay legible */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: theme('colors.brand.600');
+  }
+
+  ::selection {
+    background-color: theme('colors.brand.100');
+    color: theme('colors.navy.900');
   }
 }
 
@@ -18,32 +51,71 @@
     font-family: 'Plus Jakarta Sans', Inter, system-ui, sans-serif;
   }
 
+  /* Operational identifier: passport, visa, flight, batch, licence, reference */
+  .identifier {
+    font-family: theme('fontFamily.mono');
+    font-variant-ligatures: none;
+    letter-spacing: 0.01em;
+  }
+
   .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.15);
+    background: rgba(13, 26, 43, 0.18);
     border-radius: 9999px;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(13, 26, 43, 0.3);
   }
 
-  .bg-islamic-pattern {
-    background-image: url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.04' stroke-width='1'%3E%3Cpath d='M40 0 L80 40 L40 80 L0 40 Z'/%3E%3Cpath d='M40 20 L60 40 L40 60 L20 40 Z'/%3E%3Ccircle cx='40' cy='40' r='5'/%3E%3C/g%3E%3C/svg%3E");
+  /* Restrained geometric motif used on brand surfaces only */
+  .bg-hajj-motif {
+    background-image: url("data:image/svg+xml,%3Csvg width='72' height='72' viewBox='0 0 72 72' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.05' stroke-width='1'%3E%3Cpath d='M36 0 L72 36 L36 72 L0 36 Z'/%3E%3Cpath d='M36 14 L58 36 L36 58 L14 36 Z'/%3E%3C/g%3E%3C/svg%3E");
   }
 
   .bg-grid-pattern {
-    background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-    background-size: 40px 40px;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  /* Outline treatment for derived/planned states — a dashed edge that reads
+     as "not yet confirmed" independently of hue. */
+  .provenance-derived {
+    border-style: dashed;
   }
 
   .text-balance {
     text-wrap: balance;
+  }
+
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+  }
+  .skip-link:focus {
+    left: 0.75rem;
+    top: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

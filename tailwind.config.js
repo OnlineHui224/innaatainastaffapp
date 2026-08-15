@@ -4,6 +4,7 @@ export default {
   theme: {
     extend: {
       colors: {
+        /* Enterprise blue — primary interactive colour */
         brand: {
           50: '#eef5fb',
           100: '#d7e8f5',
@@ -17,11 +18,21 @@ export default {
           900: '#14304a',
           950: '#0c1f31',
         },
+        /* Deep navy — application chrome, headers, critical surfaces */
         navy: {
+          50: '#f2f5f8',
+          100: '#e2e8ef',
+          200: '#c2cede',
+          300: '#93a8c1',
+          400: '#5d7793',
+          500: '#38506e',
+          600: '#27405c',
+          700: '#1c3149',
           800: '#13243b',
           900: '#0d1a2b',
           950: '#08111d',
         },
+        /* Gold — accent only. Never a navigation fill. */
         gold: {
           50: '#fbf6e9',
           100: '#f5e9c8',
@@ -45,18 +56,33 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         display: ['"Plus Jakarta Sans"', 'Inter', 'system-ui', 'sans-serif'],
+        /* Reserved for genuine operational identifiers only */
+        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+      },
+      borderRadius: {
+        /* Restrained radius scale — structural, not pill-shaped */
+        DEFAULT: '3px',
+        sm: '2px',
+        md: '4px',
+        lg: '6px',
+        xl: '8px',
+        '2xl': '10px',
+      },
+      boxShadow: {
+        /* Minimal elevation — rules and borders carry the structure */
+        panel: '0 1px 2px 0 rgb(13 26 43 / 0.04)',
+        raised: '0 2px 6px -1px rgb(13 26 43 / 0.08), 0 1px 2px -1px rgb(13 26 43 / 0.04)',
+        overlay: '0 12px 32px -8px rgb(8 17 29 / 0.28)',
+      },
+      fontSize: {
+        '2xs': ['0.6875rem', { lineHeight: '1rem' }],
       },
       animation: {
-        'fade-in': 'fadeIn 0.6s ease-out forwards',
-        'fade-in-up': 'fadeInUp 0.6s ease-out forwards',
-        'fade-in-delay-1': 'fadeInUp 0.6s ease-out 0.1s forwards',
-        'fade-in-delay-2': 'fadeInUp 0.6s ease-out 0.2s forwards',
-        'fade-in-delay-3': 'fadeInUp 0.6s ease-out 0.3s forwards',
-        'fade-in-delay-4': 'fadeInUp 0.6s ease-out 0.4s forwards',
-        'slide-in': 'slideIn 0.4s ease-out forwards',
-        'scale-in': 'scaleIn 0.3s ease-out forwards',
-        'pulse-soft': 'pulseSoft 2s ease-in-out infinite',
-        'shimmer': 'shimmer 2.5s linear infinite',
+        'fade-in': 'fadeIn 0.2s ease-out forwards',
+        'fade-in-up': 'fadeInUp 0.25s ease-out forwards',
+        'slide-in': 'slideIn 0.2s ease-out forwards',
+        'scale-in': 'scaleIn 0.15s ease-out forwards',
+        shimmer: 'shimmer 1.6s linear infinite',
       },
       keyframes: {
         fadeIn: {
@@ -64,24 +90,20 @@ export default {
           '100%': { opacity: '1' },
         },
         fadeInUp: {
-          '0%': { opacity: '0', transform: 'translateY(20px)' },
+          '0%': { opacity: '0', transform: 'translateY(6px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
         slideIn: {
-          '0%': { opacity: '0', transform: 'translateX(-10px)' },
+          '0%': { opacity: '0', transform: 'translateX(-12px)' },
           '100%': { opacity: '1', transform: 'translateX(0)' },
         },
         scaleIn: {
-          '0%': { opacity: '0', transform: 'scale(0.95)' },
+          '0%': { opacity: '0', transform: 'scale(0.98)' },
           '100%': { opacity: '1', transform: 'scale(1)' },
         },
-        pulseSoft: {
-          '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.6' },
-        },
         shimmer: {
-          '0%': { backgroundPosition: '-1000px 0' },
-          '100%': { backgroundPosition: '1000px 0' },
+          '0%': { backgroundPosition: '-800px 0' },
+          '100%': { backgroundPosition: '800px 0' },
         },
       },
     },

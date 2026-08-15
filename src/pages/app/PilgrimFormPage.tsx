@@ -1,12 +1,42 @@
-import { useState, useEffect, type FormEvent } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2, AlertCircle, UserPlus, UserCog } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Save } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { validatePilgrim, friendlyError } from '@/lib/validation';
+import { friendlyError, validatePilgrim } from '@/lib/validation';
 import { logAudit } from '@/lib/audit';
 import type { Pilgrim, PilgrimInput, SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
+import { Alert } from '@/components/ui/Alert';
+import { Button } from '@/components/ui/Button';
+import { Field, Input, Select, Textarea } from '@/components/ui/Field';
+import { LoadingBlock } from '@/components/ui/Feedback';
+import { Panel } from '@/components/ui/Panel';
+
+/**
+ * The general Add/Edit form manages identity, responsibility, planned travel and
+ * notes only.
+ *
+ * Actual arrival and actual departure are deliberately absent: they are recorded
+ * exclusively through the confirmation and correction workflows on the pilgrim
+ * record, so they can never be set without a named officer and a timestamp. The
+ * underlying columns are untouched by this form — it simply never writes them.
+ */
+
+type FormState = Omit<PilgrimInput, 'arrival_date' | 'actual_departure_date'>;
+
+const EMPTY_FORM: FormState = {
+  full_name: '',
+  passport_number: '',
+  nationality: '',
+  phone_number: '',
+  gender: null,
+  date_of_birth: '',
+  sub_agent_id: null,
+  expected_departure_date: '',
+  expected_return_date: '',
+  operational_notes: '',
+};
 
 export default function PilgrimFormPage() {
   const { id } = useParams();
@@ -14,20 +44,7 @@ export default function PilgrimFormPage() {
   const navigate = useNavigate();
   const { profile } = useAuth();
 
-  const [form, setForm] = useState<PilgrimInput>({
-    full_name: '',
-    passport_number: '',
-    nationality: '',
-    phone_number: '',
-    gender: null,
-    date_of_birth: '',
-    sub_agent_id: null,
-    arrival_date: '',
-    expected_departure_date: '',
-    expected_return_date: '',
-    actual_departure_date: '',
-    operational_notes: '',
-  });
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [subAgents, setSubAgents] = useState<SubAgent[]>([]);
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(isEdit);
@@ -36,9 +53,14 @@ export default function PilgrimFormPage() {
   const [existing, setExisting] = useState<Pilgrim | null>(null);
 
   useEffect(() => {
-    supabase.from('sub_agents').select('*').eq('active_status', true).order('organisation_name').then(({ data }) => {
-      if (data) setSubAgents(data as SubAgent[]);
-    });
+    supabase
+      .from('sub_agents')
+      .select('*')
+      .eq('active_status', true)
+      .order('organisation_name')
+      .then(({ data }) => {
+        if (data) setSubAgents(data as SubAgent[]);
+      });
   }, []);
 
   useEffect(() => {
@@ -51,7 +73,7 @@ export default function PilgrimFormPage() {
       .maybeSingle()
       .then(({ data, error }) => {
         if (error || !data) {
-          setDbError('Pilgrim not found.');
+          setDbError('This pilgrim record could not be found.');
         } else {
           const p = data as Pilgrim;
           setExisting(p);
@@ -63,10 +85,8 @@ export default function PilgrimFormPage() {
             gender: p.gender,
             date_of_birth: p.date_of_birth || '',
             sub_agent_id: p.sub_agent_id,
-            arrival_date: p.arrival_date || '',
             expected_departure_date: p.expected_departure_date,
             expected_return_date: p.expected_return_date || '',
-            actual_departure_date: p.actual_departure_date || '',
             operational_notes: p.operational_notes || '',
           });
         }
@@ -74,7 +94,7 @@ export default function PilgrimFormPage() {
       });
   }, [id]);
 
-  function update<K extends keyof PilgrimInput>(key: K, value: PilgrimInput[K]) {
+  function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
@@ -83,20 +103,21 @@ export default function PilgrimFormPage() {
     setErrors([]);
     setDbError(null);
 
-    const cleanInput: PilgrimInput = {
+    const cleanInput: FormState = {
       ...form,
+      full_name: form.full_name.trim(),
+      passport_number: form.passport_number.trim(),
+      nationality: form.nationality.trim(),
       phone_number: form.phone_number?.trim() || null,
       date_of_birth: form.date_of_birth || null,
-      arrival_date: form.arrival_date || null,
       expected_return_date: form.expected_return_date || null,
-      actual_departure_date: form.actual_departure_date || null,
       operational_notes: form.operational_notes?.trim() || null,
       sub_agent_id: form.sub_agent_id || null,
       gender: form.gender || null,
       is_sample_data: false,
     };
 
-    const validation = validatePilgrim(cleanInput);
+    const validation = validatePilgrim(cleanInput as PilgrimInput);
     if (!validation.valid) {
       setErrors(validation.errors);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -106,6 +127,9 @@ export default function PilgrimFormPage() {
     setLoading(true);
     try {
       if (isEdit && id) {
+        /* Only the fields this form owns are written. Actual-movement columns
+           are never part of the payload, so an edit cannot overwrite a
+           confirmation. */
         const { data, error } = await supabase
           .from('pilgrims')
           .update({
@@ -128,28 +152,30 @@ export default function PilgrimFormPage() {
           performedBy: profile?.id ?? null,
           performedByName: profile?.full_name ?? '',
         });
-      } else {
-        const { data, error } = await supabase
-          .from('pilgrims')
-          .insert({
-            ...cleanInput,
-            created_by: profile?.id ?? null,
-            updated_by: profile?.id ?? null,
-          })
-          .select('*')
-          .maybeSingle();
-
-        if (error) throw error;
-        await logAudit({
-          action: 'pilgrim_created',
-          recordType: 'pilgrim',
-          recordId: (data as { id: string } | null)?.id ?? null,
-          recordLabel: cleanInput.full_name,
-          newValue: data as Record<string, unknown> | null,
-          performedBy: profile?.id ?? null,
-          performedByName: profile?.full_name ?? '',
-        });
+        navigate(`/app/pilgrims/${id}`);
+        return;
       }
+
+      const { data, error } = await supabase
+        .from('pilgrims')
+        .insert({
+          ...cleanInput,
+          created_by: profile?.id ?? null,
+          updated_by: profile?.id ?? null,
+        })
+        .select('*')
+        .maybeSingle();
+
+      if (error) throw error;
+      await logAudit({
+        action: 'pilgrim_created',
+        recordType: 'pilgrim',
+        recordId: (data as { id: string } | null)?.id ?? null,
+        recordLabel: cleanInput.full_name,
+        newValue: data as Record<string, unknown> | null,
+        performedBy: profile?.id ?? null,
+        performedByName: profile?.full_name ?? '',
+      });
       navigate('/app/pilgrims');
     } catch (err) {
       setDbError(friendlyError(err));
@@ -159,137 +185,185 @@ export default function PilgrimFormPage() {
     }
   }
 
-  if (pageLoading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
-      </div>
-    );
-  }
+  if (pageLoading) return <LoadingBlock label="Loading pilgrim record…" />;
 
-  const inputCls = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all';
-  const labelCls = 'block text-sm font-semibold text-slate-700 mb-1.5';
+  const cancelTo = isEdit ? `/app/pilgrims/${id}` : '/app/pilgrims';
 
   return (
     <div>
-      <Link to={isEdit ? `/app/pilgrims/${id}` : '/app/pilgrims'} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-        <ArrowLeft className="h-4 w-4" /> Back
-      </Link>
-
       <PageHeader
-        title={isEdit ? 'Edit Pilgrim' : 'Add Pilgrim'}
-        subtitle={isEdit ? 'Update pilgrim record details' : 'Register a new pilgrim'}
-        icon={isEdit ? <UserCog className="h-6 w-6" /> : <UserPlus className="h-6 w-6" />}
+        eyebrow={isEdit ? 'Pilgrim record' : 'Operations'}
+        title={isEdit ? 'Edit pilgrim' : 'Add pilgrim'}
+        subtitle={
+          isEdit
+            ? 'Update identity, responsibility, planned travel and notes. Actual movement is recorded separately through the confirmation workflows.'
+            : 'Register a new pilgrim record. The pilgrim starts with planned travel only — no movement is confirmed.'
+        }
       />
 
       {(errors.length > 0 || dbError) && (
-        <div className="mb-6 rounded-2xl bg-red-50 border border-red-200 p-5">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-            <div>
-              {dbError && <p className="text-sm text-red-700 font-medium">{dbError}</p>}
-              {errors.length > 0 && (
-                <ul className="mt-1 space-y-1 text-sm text-red-700">
-                  {errors.map((er) => <li key={er}>• {er}</li>)}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
+        <Alert tone="critical" title="This record could not be saved" className="mb-6">
+          {dbError && <p className="font-medium">{dbError}</p>}
+          {errors.length > 0 && (
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {errors.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
+          )}
+        </Alert>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-          <h3 className="font-display font-bold text-base text-slate-900 mb-4">Personal Information</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>Full Name <span className="text-red-500">*</span></label>
-              <input className={inputCls} value={form.full_name} onChange={(e) => update('full_name', e.target.value)} placeholder="e.g. Ahmed Ibrahim" />
-            </div>
-            <div>
-              <label className={labelCls}>Passport Number <span className="text-red-500">*</span></label>
-              <input className={inputCls} value={form.passport_number} onChange={(e) => update('passport_number', e.target.value)} placeholder="Unique passport number" />
-            </div>
-            <div>
-              <label className={labelCls}>Nationality <span className="text-red-500">*</span></label>
-              <input className={inputCls} value={form.nationality} onChange={(e) => update('nationality', e.target.value)} placeholder="e.g. Nigeria" />
-            </div>
-            <div>
-              <label className={labelCls}>Phone Number</label>
-              <input className={inputCls} value={form.phone_number || ''} onChange={(e) => update('phone_number', e.target.value)} placeholder="e.g. +234 800 000 0000" />
-            </div>
-            <div>
-              <label className={labelCls}>Gender</label>
-              <select className={inputCls} value={form.gender || ''} onChange={(e) => update('gender', (e.target.value || null) as 'male' | 'female' | null)}>
+      <form onSubmit={handleSubmit} className="max-w-4xl space-y-6" noValidate>
+        <Panel title="Identity">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <Field label="Full name" htmlFor="full-name" required>
+              <Input
+                id="full-name"
+                value={form.full_name}
+                onChange={(e) => update('full_name', e.target.value)}
+                placeholder="e.g. Ahmed Ibrahim"
+                autoComplete="off"
+              />
+            </Field>
+            <Field
+              label="Passport number"
+              htmlFor="passport-number"
+              required
+              hint="Must be unique across the platform."
+            >
+              {/* Genuine operational identifier */}
+              <Input
+                id="passport-number"
+                identifier
+                value={form.passport_number}
+                onChange={(e) => update('passport_number', e.target.value.toUpperCase())}
+                placeholder="e.g. B12345678"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Nationality" htmlFor="nationality" required>
+              <Input
+                id="nationality"
+                value={form.nationality}
+                onChange={(e) => update('nationality', e.target.value)}
+                placeholder="e.g. Nigeria"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Phone number" htmlFor="phone-number">
+              <Input
+                id="phone-number"
+                type="tel"
+                value={form.phone_number || ''}
+                onChange={(e) => update('phone_number', e.target.value)}
+                placeholder="e.g. +234 800 000 0000"
+              />
+            </Field>
+            <Field label="Gender" htmlFor="gender">
+              <Select
+                id="gender"
+                value={form.gender || ''}
+                onChange={(e) => update('gender', (e.target.value || null) as 'male' | 'female' | null)}
+              >
                 <option value="">Not specified</option>
                 <option value="male">Male</option>
                 <option value="female">Female</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>Date of Birth</label>
-              <input type="date" className={inputCls} value={form.date_of_birth || ''} onChange={(e) => update('date_of_birth', e.target.value)} />
-            </div>
+              </Select>
+            </Field>
+            <Field label="Date of birth" htmlFor="date-of-birth">
+              <Input
+                id="date-of-birth"
+                type="date"
+                value={form.date_of_birth || ''}
+                onChange={(e) => update('date_of_birth', e.target.value)}
+              />
+            </Field>
           </div>
-        </div>
+        </Panel>
 
-        <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-          <h3 className="font-display font-bold text-base text-slate-900 mb-4">Sub-Agent Assignment</h3>
-          <div>
-            <label className={labelCls}>Assigned Sub-Agent</label>
-            <select className={inputCls} value={form.sub_agent_id || ''} onChange={(e) => update('sub_agent_id', e.target.value || null)}>
+        <Panel title="Responsibility">
+          <Field
+            label="Assigned sub-agent"
+            htmlFor="sub-agent"
+            hint="A pilgrim may temporarily have no assigned sub-agent. Only active sub-agents are listed."
+          >
+            <Select
+              id="sub-agent"
+              value={form.sub_agent_id || ''}
+              onChange={(e) => update('sub_agent_id', e.target.value || null)}
+            >
               <option value="">Unassigned</option>
-              {subAgents.map((sa) => (
-                <option key={sa.id} value={sa.id}>{sa.organisation_name} — {sa.country}</option>
+              {subAgents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.organisation_name} — {agent.country}
+                </option>
               ))}
-            </select>
-            <p className="mt-1.5 text-xs text-slate-400">A pilgrim may temporarily have no assigned sub-agent.</p>
-          </div>
-        </div>
+            </Select>
+          </Field>
+        </Panel>
 
-        <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-          <h3 className="font-display font-bold text-base text-slate-900 mb-4">Planned Travel Dates</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>Scheduled Outbound Date <span className="text-red-500">*</span></label>
-              <input type="date" className={inputCls} value={form.expected_departure_date} onChange={(e) => update('expected_departure_date', e.target.value)} />
-              <p className="mt-1.5 text-xs text-slate-400">Planned departure from home country.</p>
-            </div>
-            <div>
-              <label className={labelCls}>Expected Return Date</label>
-              <input type="date" className={inputCls} value={form.expected_return_date || ''} onChange={(e) => update('expected_return_date', e.target.value)} />
-              <p className="mt-1.5 text-xs text-slate-400">Planned return date. Not an actual departure confirmation.</p>
-            </div>
+        <Panel
+          edge="derived"
+          title="Planned travel"
+          description="Plans only — scheduled dates do not confirm movement."
+        >
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <Field
+              label="Scheduled outbound date"
+              htmlFor="expected-departure"
+              required
+              hint="Planned departure from the home country."
+            >
+              <Input
+                id="expected-departure"
+                type="date"
+                value={form.expected_departure_date}
+                onChange={(e) => update('expected_departure_date', e.target.value)}
+              />
+            </Field>
+            <Field
+              label="Expected return date"
+              htmlFor="expected-return"
+              hint="Planned return. This is not a departure confirmation."
+            >
+              <Input
+                id="expected-return"
+                type="date"
+                value={form.expected_return_date || ''}
+                onChange={(e) => update('expected_return_date', e.target.value)}
+              />
+            </Field>
           </div>
-          <div className="mt-4 rounded-lg bg-blue-50 border border-blue-100 px-4 py-3">
-            <p className="text-xs text-blue-700">
-              Actual arrival and departure are confirmed separately by authorized staff from the pilgrim detail page. These dates are plans only.
-            </p>
-          </div>
-        </div>
 
-        <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-          <h3 className="font-display font-bold text-base text-slate-900 mb-4">Operational Notes</h3>
-          <textarea
-            className={`${inputCls} min-h-[100px] resize-y`}
-            value={form.operational_notes || ''}
-            onChange={(e) => update('operational_notes', e.target.value)}
-            placeholder="Any operational notes about this pilgrim..."
-          />
-        </div>
+          <Alert tone="info" className="mt-5">
+            Actual arrival and actual departure are not editable here. They are recorded by an authorised staff
+            member from the pilgrim record, where the confirming officer and timestamp are captured.
+          </Alert>
+        </Panel>
 
-        <div className="flex items-center justify-end gap-3">
-          <Link to={isEdit ? `/app/pilgrims/${id}` : '/app/pilgrims'} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all">
+        <Panel title="Operational notes">
+          <Field label="Notes" htmlFor="operational-notes">
+            <Textarea
+              id="operational-notes"
+              rows={4}
+              value={form.operational_notes || ''}
+              onChange={(e) => update('operational_notes', e.target.value)}
+              placeholder="Any operational context for this pilgrim…"
+            />
+          </Field>
+        </Panel>
+
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <Link
+            to={cancelTo}
+            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+          >
             Cancel
           </Link>
-          <button
-            type="submit"
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-900/20 hover:bg-brand-600 transition-all active:scale-95 disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {isEdit ? 'Save Changes' : 'Create Pilgrim'}
-          </button>
+          <Button type="submit" loading={loading} icon={<Save className="h-4 w-4" aria-hidden="true" />}>
+            {isEdit ? 'Save changes' : 'Create pilgrim'}
+          </Button>
         </div>
       </form>
     </div>

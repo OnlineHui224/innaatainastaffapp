@@ -1,234 +1,445 @@
+import { useState } from 'react';
 import {
-  User,
-  Bookmark,
-  FileText,
-  CheckCircle2,
   AlertTriangle,
-  XCircle,
-  Building2,
-  Package,
+  Bookmark,
+  Bot,
+  Bus,
+  CheckCircle2,
+  FileText,
+  Flag,
   Hotel,
-  Calendar,
+  Lock,
   ShieldCheck,
+  User,
+  Users,
+  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { VisaExtractionResult, PilgrimMatchResult, MatchStatus } from '@/types/visa';
+import { formatDateTime } from '@/lib/priority';
+import { Alert } from '@/components/ui/Alert';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Identifier, Input } from '@/components/ui/Field';
+import { Panel } from '@/components/ui/Panel';
+import { TransportSummary } from './TransportSummary';
+import type {
+  ExtractedField,
+  ExtractedFieldKey,
+  MatchStatus,
+  PilgrimMatchResult,
+  VisaCaseDetails,
+  VisaExtractionResult,
+} from '@/types/visa';
 import { MATCH_STATUS_LABELS } from '@/types/visa';
-import type { VisaCaseDetails } from '@/types/visa';
 
 interface ReviewScreenProps {
   extraction: VisaExtractionResult;
   match: PilgrimMatchResult;
   details: VisaCaseDetails;
-  onExtractionChange: (updates: Partial<VisaExtractionResult>) => void;
-  onDetailsChange: (updates: Partial<VisaCaseDetails>) => void;
+  /** Officer edit — clears any existing verification for that field. */
+  onFieldEdit: (key: ExtractedFieldKey, value: string) => void;
+  /** Explicit verification — the ONLY route to a verified field. */
+  onFieldVerify: (key: ExtractedFieldKey) => void;
+  /** Explicit un-verification, so an officer can withdraw a review. */
+  onFieldUnverify: (key: ExtractedFieldKey) => void;
+  /** Local preview URL for the uploaded document, when previewable. */
+  documentPreviewUrl: string | null;
+  documentName: string | null;
 }
 
-function confidenceStyle(conf: 'high' | 'medium' | 'low' | null) {
-  if (conf === 'high') return { color: 'text-green-700', bg: 'bg-green-50', border: 'border-green-200', icon: CheckCircle2 };
-  if (conf === 'medium' || conf === 'low') return { color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', icon: AlertTriangle };
-  return { color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200', icon: FileText };
+interface FieldSpec {
+  key: ExtractedFieldKey;
+  label: string;
+  icon: typeof User;
+  placeholder: string;
+  /** Genuine operational identifier — rendered monospace. */
+  identifier?: boolean;
+  help?: string;
 }
 
-function matchStatusStyle(status: MatchStatus) {
-  if (status === 'exact_passport_match') return { color: 'text-green-700', bg: 'bg-green-50', border: 'border-green-200', icon: CheckCircle2 };
-  if (status === 'possible_name_match' || status === 'multiple_matches') return { color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', icon: AlertTriangle };
-  if (status === 'no_match') return { color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200', icon: User };
-  return { color: 'text-red-700', bg: 'bg-red-50', border: 'border-red-200', icon: XCircle };
+const FIELDS: FieldSpec[] = [
+  { key: 'passengerName', label: 'Passenger full name', icon: User, placeholder: 'Name as printed on the visa' },
+  {
+    key: 'passportNumber',
+    label: 'Passport number',
+    icon: Bookmark,
+    placeholder: 'Passport number as printed',
+    identifier: true,
+  },
+  {
+    key: 'visaNumber',
+    label: 'Visa number',
+    icon: FileText,
+    placeholder: 'Visa number as printed',
+    identifier: true,
+  },
+  {
+    key: 'nationality',
+    label: 'Nationality',
+    icon: Flag,
+    placeholder: 'Nationality as printed on the visa',
+    // Nationality is surfaced deliberately: it must never reach a saved record unseen.
+    help: 'Extracted from the visa document. Confirm it against the document before continuing.',
+  },
+];
+
+/** Every field an officer must explicitly verify before the case may proceed. */
+export const REQUIRED_VERIFICATION_KEYS: ExtractedFieldKey[] = FIELDS.map((f) => f.key);
+
+export function countVerified(extraction: VisaExtractionResult): number {
+  return REQUIRED_VERIFICATION_KEYS.filter((key) => extraction[key].verified).length;
 }
 
-function SummaryRow({ icon: Icon, label, value }: { icon: typeof Building2; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-3 py-2.5 border-b border-slate-50 last:border-0">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs text-slate-400 font-medium">{label}</p>
-        <p className="text-sm text-slate-800 font-medium truncate">{value || 'Not selected'}</p>
-      </div>
-    </div>
-  );
+export function allRequiredVerified(extraction: VisaExtractionResult): boolean {
+  return countVerified(extraction) === REQUIRED_VERIFICATION_KEYS.length;
 }
+
+function matchStyle(status: MatchStatus) {
+  switch (status) {
+    case 'exact_passport_match':
+      return { tone: 'positive' as const, Icon: CheckCircle2, wrap: 'border-emerald-400 bg-emerald-50' };
+    case 'possible_name_match':
+    case 'multiple_matches':
+      return { tone: 'caution' as const, Icon: AlertTriangle, wrap: 'border-amber-500 bg-amber-50' };
+    case 'no_match':
+      return { tone: 'neutral' as const, Icon: Users, wrap: 'border-slate-400 bg-slate-50' };
+    default:
+      return { tone: 'critical' as const, Icon: XCircle, wrap: 'border-red-400 bg-red-50' };
+  }
+}
+
+const MATCH_GUIDANCE: Record<MatchStatus, string> = {
+  exact_passport_match:
+    'The passport number on this document matches exactly one pilgrim record. This is a direct identity match.',
+  possible_name_match:
+    'Not a match until verified. Names alone are not identity — confirm the passport number against the document before proceeding.',
+  no_match:
+    'No pilgrim on the platform matches this document. A visa can only be logged against an existing pilgrim record.',
+  passport_mismatch:
+    'The passport number on this document conflicts with the passport held on the selected pilgrim record. This must be resolved before saving.',
+  duplicate_visa:
+    'This visa number is already recorded against a pilgrim. Saving again would create a duplicate visa record.',
+  multiple_matches:
+    'Not a match until verified. More than one pilgrim record could correspond to this document — identify the correct one before proceeding.',
+};
 
 export function ReviewScreen({
   extraction,
   match,
   details,
-  onExtractionChange,
+  onFieldEdit,
+  onFieldVerify,
+  onFieldUnverify,
+  documentPreviewUrl,
+  documentName,
 }: ReviewScreenProps) {
-  const fields: { key: keyof VisaExtractionResult; label: string; icon: typeof User; placeholder: string }[] = [
-    { key: 'passengerName', label: 'Passenger Full Name', icon: User, placeholder: 'Passenger name from document' },
-    { key: 'passportNumber', label: 'Passport Number', icon: Bookmark, placeholder: 'Passport number from document' },
-    { key: 'visaNumber', label: 'Visa Number', icon: FileText, placeholder: 'Visa number from document' },
-  ];
-
-  const matchStyle = matchStatusStyle(match.status);
-  const MatchIcon = matchStyle.icon;
+  const style = matchStyle(match.status);
+  const MatchIcon = style.Icon;
+  const verifiedCount = countVerified(extraction);
+  const total = REQUIRED_VERIFICATION_KEYS.length;
 
   return (
     <div className="space-y-6">
-      {/* Card A — Extracted Visa Information */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="px-6 py-5 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-              <FileText className="h-4 w-4" />
-            </div>
-            <div>
-              <h3 className="font-display font-bold text-base text-navy-900">Extracted Visa Information</h3>
-              <p className="text-xs text-slate-500">Review and edit extracted values before confirming</p>
-            </div>
+      <Panel
+        title="Extracted visa information"
+        description="Each value below was produced by the extractor. Editing a value does not review it — every field must be verified explicitly."
+        actions={
+          <Badge tone={verifiedCount === total ? 'positive' : 'caution'} treatment={verifiedCount === total ? 'solid' : 'outline'}>
+            {verifiedCount} of {total} verified
+          </Badge>
+        }
+        bodyClassName="p-0"
+      >
+        <div className="grid grid-cols-1 xl:grid-cols-5">
+          {/* Fields */}
+          <div className="space-y-5 border-b border-slate-200 p-5 xl:col-span-3 xl:border-b-0 xl:border-r">
+            {verifiedCount < total && (
+              <Alert tone="warning" title="Verification required">
+                {total - verifiedCount} {total - verifiedCount === 1 ? 'field has' : 'fields have'} not been
+                verified. Continuing stays disabled until every field has been explicitly confirmed against the
+                document.
+              </Alert>
+            )}
+
+            {FIELDS.map((spec) => (
+              <ExtractedFieldRow
+                key={spec.key}
+                spec={spec}
+                field={extraction[spec.key]}
+                onEdit={(value) => onFieldEdit(spec.key, value)}
+                onVerify={() => onFieldVerify(spec.key)}
+                onUnverify={() => onFieldUnverify(spec.key)}
+              />
+            ))}
+          </div>
+
+          {/* Document preview beside the fields where desktop space permits */}
+          <div className="p-5 xl:col-span-2">
+            <DocumentPreview url={documentPreviewUrl} name={documentName} />
           </div>
         </div>
-        <div className="px-6 py-5 space-y-4">
-          {fields.map(({ key, label, icon: Icon, placeholder }) => {
-            const field = extraction[key];
-            const style = confidenceStyle(field.confidence);
-            const StatusIcon = style.icon;
+      </Panel>
 
-            return (
-              <div key={key}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                    <Icon className="h-3.5 w-3.5 text-slate-400" />
-                    {label}
-                  </label>
-                  <div className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border', style.bg, style.color, style.border)}>
-                    <StatusIcon className="h-3 w-3" />
-                    {field.needsReview ? 'Review required' : field.confidence === 'high' ? 'High confidence' : 'Extracted'}
-                  </div>
-                </div>
-                <input
-                  type="text"
-                  value={field.value || ''}
-                  onChange={(e) => {
-                    const newValue = e.target.value;
-                    onExtractionChange({
-                      [key]: { ...field, value: newValue, needsReview: false },
-                    } as Partial<VisaExtractionResult>);
-                  }}
-                  placeholder={placeholder}
-                  className={cn(
-                    'w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition-all',
-                    field.needsReview ? 'border-amber-300' : 'border-slate-200',
-                  )}
-                />
-                {field.sourcePage && (
-                  <p className="mt-1 text-xs text-slate-400">Source: page {field.sourcePage}</p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Card B — HajjERP Match */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="px-6 py-5 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-              <User className="h-4 w-4" />
-            </div>
-            <div>
-              <h3 className="font-display font-bold text-base text-navy-900">HajjERP Match</h3>
-              <p className="text-xs text-slate-500">Checking extracted data against existing pilgrims</p>
-            </div>
-          </div>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          {/* Match status badge */}
-          <div className={cn('flex items-center gap-2.5 rounded-xl border px-4 py-3', matchStyle.bg, matchStyle.border)}>
-            <MatchIcon className={cn('h-5 w-5 shrink-0', matchStyle.color)} />
-            <div>
-              <p className={cn('text-sm font-semibold', matchStyle.color)}>
-                {MATCH_STATUS_LABELS[match.status]}
+      {/* Matching */}
+      <Panel
+        title="HajjERP match"
+        description="How this document relates to the pilgrim records already on the platform."
+      >
+        <div className={cn('flex items-start gap-3 rounded-md border p-4', style.wrap)}>
+          <MatchIcon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="font-display text-sm font-bold text-navy-900">
+              {MATCH_STATUS_LABELS[match.status]}
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-700">{MATCH_GUIDANCE[match.status]}</p>
+            {(match.status === 'possible_name_match' || match.status === 'multiple_matches') && (
+              <p className="mt-2 inline-flex items-center gap-1.5 rounded border border-amber-600 bg-white px-2 py-1 text-2xs font-bold uppercase tracking-wide text-amber-900">
+                <Lock className="h-3 w-3" aria-hidden="true" />
+                Not a match until verified
               </p>
-              {match.status === 'possible_name_match' && (
-                <p className="text-xs text-amber-600 mt-0.5">
-                  Similar-name matches are never automatically accepted — review required
-                </p>
-              )}
-            </div>
+            )}
           </div>
+        </div>
 
-          {/* Match details */}
-          {match.pilgrim && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-xs text-slate-400 font-medium">Existing Pilgrim</p>
-                  <p className="text-slate-800 font-medium">{match.pilgrim.full_name}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-400 font-medium">Existing Passport</p>
-                  <p className="text-slate-800 font-medium">{match.pilgrim.passport_number}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-400 font-medium">Existing Agent</p>
-                  <p className="text-slate-800 font-medium">{match.pilgrim.agent_name || 'Unassigned'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-400 font-medium">Existing Visa Number</p>
-                  <p className="text-slate-800 font-medium">{match.pilgrim.visa_number || 'None on file'}</p>
-                </div>
-              </div>
+        {match.pilgrim && (
+          <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 rounded-md border border-slate-300 bg-slate-50 p-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Existing pilgrim</dt>
+              <dd className="mt-0.5 text-sm font-medium text-slate-900">{match.pilgrim.full_name}</dd>
             </div>
-          )}
+            <div>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Existing passport</dt>
+              <dd className="mt-0.5 text-sm">
+                <Identifier value={match.pilgrim.passport_number} />
+              </dd>
+            </div>
+            <div>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Existing agent</dt>
+              <dd className="mt-0.5 text-sm text-slate-900">{match.pilgrim.agent_name || 'Unassigned'}</dd>
+            </div>
+            <div>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
+                Existing visa number
+              </dt>
+              <dd className="mt-0.5 text-sm">
+                {match.pilgrim.visa_number ? (
+                  <Identifier value={match.pilgrim.visa_number} />
+                ) : (
+                  <span className="text-slate-500">None on file</span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        )}
 
-          {/* Conflicts */}
-          {match.conflicts.length > 0 && (
-            <div className="space-y-2">
-              {match.conflicts.map((conflict, i) => (
-                <div key={i} className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2">
-                  <XCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700">{conflict}</p>
-                </div>
+        {match.conflicts.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {match.conflicts.map((conflict, index) => (
+              <Alert key={index} tone="critical" title="Extraction conflict">
+                {conflict}
+              </Alert>
+            ))}
+          </div>
+        )}
+
+        {match.alternatives.length > 0 && (
+          <div className="mt-4">
+            <p className="mb-2 text-2xs font-bold uppercase tracking-wide text-slate-600">
+              Other possible matches — none of these is accepted automatically
+            </p>
+            <ul className="space-y-1.5">
+              {match.alternatives.map((alt) => (
+                <li
+                  key={alt.id}
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  <User className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                  <span className="font-medium text-slate-900">{alt.full_name}</span>
+                  <Identifier value={alt.passport_number} />
+                </li>
               ))}
-            </div>
-          )}
-
-          {/* Alternatives */}
-          {match.alternatives.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-slate-500 mb-2">Other possible matches:</p>
-              <div className="space-y-1.5">
-                {match.alternatives.map((alt) => (
-                  <div key={alt.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                    <User className="h-3.5 w-3.5 text-slate-400" />
-                    <span className="text-slate-700 font-medium">{alt.full_name}</span>
-                    <span className="text-slate-400">— {alt.passport_number}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Card C — Operational Details */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="px-6 py-5 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-              <ShieldCheck className="h-4 w-4" />
-            </div>
-            <div>
-              <h3 className="font-display font-bold text-base text-navy-900">Operational Details</h3>
-              <p className="text-xs text-slate-500">Confirm the selected operational information</p>
-            </div>
+            </ul>
           </div>
+        )}
+      </Panel>
+
+      {/* Operational details confirmation */}
+      <Panel
+        title="Operational details"
+        description="The case information that will be saved alongside the reviewed visa values."
+      >
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+          <SummaryRow icon={Users} label="Responsible agent" value={details.agentName} />
+          <SummaryRow icon={FileText} label="Visa company" value={details.visaCompany} />
+          <SummaryRow icon={Hotel} label="Makkah hotel" value={details.makkahHotelName} />
+          <SummaryRow icon={Hotel} label="Madinah hotel" value={details.madinahHotelName} />
+          <SummaryRow icon={ShieldCheck} label="Planned outbound" value={details.plannedOutboundDate} />
+          <SummaryRow icon={ShieldCheck} label="Expected return" value={details.expectedReturnDate} />
+        </dl>
+
+        <div className="mt-5 border-t border-slate-200 pt-4">
+          <p className="mb-2 flex items-center gap-2 text-2xs font-bold uppercase tracking-wide text-slate-600">
+            <Bus className="h-3.5 w-3.5" aria-hidden="true" />
+            Ground transportation
+          </p>
+          {/* Bound to the current structured transport model — the obsolete
+              single-string "transportation package" field is not used. */}
+          <TransportSummary transport={details.transport} />
         </div>
-        <div className="px-6 py-4">
-          <SummaryRow icon={Building2} label="Agent" value={details.agentName} />
-          <SummaryRow icon={Package} label="Transportation Package" value={details.transportationPackage} />
-          <SummaryRow icon={FileText} label="Visa Company" value={details.visaCompany} />
-          <SummaryRow icon={Hotel} label="Makkah Hotel" value={details.makkahHotelName} />
-          <SummaryRow icon={Hotel} label="Madinah Hotel" value={details.madinahHotelName} />
-          <SummaryRow icon={Calendar} label="Planned Outbound" value={details.plannedOutboundDate || ''} />
-          <SummaryRow icon={Calendar} label="Expected Return" value={details.expectedReturnDate || ''} />
-        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function SummaryRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof User;
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+      <div className="min-w-0">
+        <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+        <dd className="mt-0.5 text-sm text-slate-900">
+          {value || <span className="text-slate-400">Not selected</span>}
+        </dd>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One extracted value with its verification control.
+ *
+ * The sequence enforced here is the approved one:
+ *   1. the extractor produces a value;
+ *   2. a value requiring review stays unverified;
+ *   3. the officer may edit it;
+ *   4. editing does NOT verify it;
+ *   5. only "Verify this value" promotes it;
+ *   6. the officer and timestamp are recorded from the authenticated session;
+ *   7. editing an already-verified value unverifies it again.
+ */
+function ExtractedFieldRow({
+  spec,
+  field,
+  onEdit,
+  onVerify,
+  onUnverify,
+}: {
+  spec: FieldSpec;
+  field: ExtractedField;
+  onEdit: (value: string) => void;
+  onVerify: () => void;
+  onUnverify: () => void;
+}) {
+  const Icon = spec.icon;
+  const inputId = `extracted-${spec.key}`;
+  const hasValue = Boolean((field.value ?? '').trim());
+
+  return (
+    <div
+      className={cn(
+        'rounded-md border p-3.5',
+        field.verified ? 'border-slate-700 bg-slate-50' : 'border-dashed border-amber-500 bg-amber-50/40',
+      )}
+    >
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <label htmlFor={inputId} className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+          <Icon className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+          {spec.label}
+        </label>
+
+        {field.verified ? (
+          <Badge tone="neutral" treatment="solid" icon={<CheckCircle2 className="h-3 w-3" aria-hidden="true" />}>
+            Human reviewed
+          </Badge>
+        ) : (
+          <Badge tone="caution" icon={<Bot className="h-3 w-3" aria-hidden="true" />}>
+            {field.confidence ? `AI extracted · ${field.confidence} confidence` : 'AI extracted'}
+          </Badge>
+        )}
+      </div>
+
+      <Input
+        id={inputId}
+        value={field.value ?? ''}
+        onChange={(e) => onEdit(e.target.value)}
+        placeholder={spec.placeholder}
+        identifier={spec.identifier}
+        aria-describedby={`${inputId}-state`}
+      />
+
+      <div id={`${inputId}-state`} className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-2xs leading-relaxed text-slate-600">
+          {field.verified ? (
+            <>
+              Verified by{' '}
+              <span className="font-semibold text-slate-800">{field.verifiedByName ?? 'an officer'}</span>
+              {field.verifiedAt ? ` · ${formatDateTime(field.verifiedAt)}` : ''}
+              {field.edited && ' · value was edited before verification'}
+            </>
+          ) : (
+            <>
+              {field.edited
+                ? 'Edited but not yet verified. Editing a value is not the same as reviewing it.'
+                : spec.help ?? 'Not yet verified. Confirm this value against the document.'}
+              {field.sourcePage ? ` Source: page ${field.sourcePage}.` : ''}
+            </>
+          )}
+        </p>
+
+        {field.verified ? (
+          <Button size="sm" variant="ghost" onClick={onUnverify}>
+            Withdraw verification
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="confirm"
+            onClick={onVerify}
+            disabled={!hasValue}
+            title={hasValue ? undefined : 'Enter a value before verifying it'}
+            icon={<CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />}
+          >
+            Verify this value
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DocumentPreview({ url, name }: { url: string | null; name: string | null }) {
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <div className="lg:sticky lg:top-6">
+      <p className="mb-2 text-2xs font-bold uppercase tracking-wide text-slate-600">Source document</p>
+      {url && !failed ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="block">
+          <img
+            src={url}
+            alt={name ? `Preview of ${name}` : 'Uploaded visa document'}
+            onError={() => setFailed(true)}
+            className="max-h-[28rem] w-full rounded-md border border-slate-300 object-contain"
+          />
+          <span className="mt-1.5 block text-2xs text-brand-700 underline">Open full size in a new tab</span>
+        </a>
+      ) : (
+        <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+          <FileText className="h-6 w-6 text-slate-400" aria-hidden="true" />
+          <p className="text-sm font-medium text-slate-700">{name ?? 'No document preview'}</p>
+          <p className="text-xs text-slate-500">
+            This document cannot be previewed inline. Open the original file to check each value against it.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

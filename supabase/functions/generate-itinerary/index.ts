@@ -80,6 +80,23 @@ function formatDate(dateStr: string): string {
   }
 }
 
+/**
+ * Escape a user-supplied value before it is interpolated into WordprocessingML.
+ * Without this, a name or hotel containing XML metacharacters corrupts the document
+ * or injects arbitrary markup into it.
+ */
+function esc(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+    // strip control characters that are illegal in XML 1.0
+    // eslint-disable-next-line no-control-regex -- matching control characters is the point of this sanitiser
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+}
+
 function generateDocxXml(req: ItineraryRequest): string {
   const { passengers, segments, group, makkahHotel, madinahHotel, itineraryType } = req;
 
@@ -89,18 +106,18 @@ function generateDocxXml(req: ItineraryRequest): string {
   const mainOrigin = firstSegment?.departureCity || firstSegment?.departureAirport || "ORIGIN";
   const mainDestination = segments.find(s => s.segmentType !== 'return')?.arrivalCity ||
     lastSegment?.arrivalCity || "DESTINATION";
-  const flightHeading = `FLIGHT: ${mainOrigin.toUpperCase()} – ${mainDestination.toUpperCase()}`;
+  const flightHeading = `FLIGHT: ${String(mainOrigin).toUpperCase()} – ${String(mainDestination).toUpperCase()}`;
 
   // Build flight rows
   const flightRows = segments.map((seg) => {
-    const from = seg.departureCity || seg.departureAirport || "-";
-    const to = seg.arrivalCity || seg.arrivalAirport || "-";
-    const date = formatDate(seg.departureDate);
-    const dep = seg.departureTime || "-";
-    const arr = seg.arrivalTime || "-";
-    const carrier = seg.airlineName || "-";
-    const flightNo = seg.flightNumber || "-";
-    const pnr = passengers[0]?.bookingReference || "-";
+    const from = esc(seg.departureCity || seg.departureAirport || "-");
+    const to = esc(seg.arrivalCity || seg.arrivalAirport || "-");
+    const date = esc(formatDate(seg.departureDate));
+    const dep = esc(seg.departureTime || "-");
+    const arr = esc(seg.arrivalTime || "-");
+    const carrier = esc(seg.airlineName || "-");
+    const flightNo = esc(seg.flightNumber || "-");
+    const pnr = esc(passengers[0]?.bookingReference || "-");
 
     return `<w:tr>
       <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${from}</w:t></w:r></w:p></w:tc>
@@ -116,21 +133,21 @@ function generateDocxXml(req: ItineraryRequest): string {
 
   // Build hotel rows
   const hotelRow = (hotel: HotelStay, cityLabel: string) => `<w:tr>
-    <w:tc><w:tcPr><w:tcW w:w="800" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${cityLabel}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${hotel.hotelName || "-"}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${formatDate(hotel.checkInDate)}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${formatDate(hotel.checkOutDate)}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${hotel.doubleRooms}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${hotel.quadRooms}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${hotel.quintRooms}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="800" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${hotel.reservationNumber || "-"}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="800" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(cityLabel)}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(hotel.hotelName || "-")}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(formatDate(hotel.checkInDate))}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(formatDate(hotel.checkOutDate))}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(hotel.doubleRooms)}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(hotel.quadRooms)}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(hotel.quintRooms)}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="800" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(hotel.reservationNumber || "-")}</w:t></w:r></w:p></w:tc>
   </w:tr>`;
 
   // Build passenger list
   const passengerRows = passengers.map((p, i) => `<w:tr>
     <w:tc><w:tcPr><w:tcW w:w="500" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${i + 1}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${p.title} ${p.fullName}</w:t></w:r></w:p></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${p.ticketNumber || "-"}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${esc(p.title)} ${esc(p.fullName)}</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="4" w:color="000000"/><w:left w:val="single" w:sz="4" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:color="000000"/><w:right w:val="single" w:sz="4" w:color="000000"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${esc(p.ticketNumber || "-")}</w:t></w:r></w:p></w:tc>
   </w:tr>`).join("\n");
 
   // Full document XML
@@ -140,7 +157,7 @@ function generateDocxXml(req: ItineraryRequest): string {
 <!-- Title -->
 <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="006600"/></w:rPr><w:t>INNA ATAINA TRAVELS</w:t></w:r></w:p>
 <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="006600"/></w:rPr><w:t>Flight Itinerary</w:t></w:r></w:p>
-<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="22"/></w:rPr><w:t>${flightHeading}</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="22"/></w:rPr><w:t>${esc(flightHeading)}</w:t></w:r></w:p>
 <w:p/>
 
 <!-- Group Information Table -->
@@ -157,12 +174,12 @@ function generateDocxXml(req: ItineraryRequest): string {
 <w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="006600"/></w:tcPr><w:p><w:r><w:rPr><w:b/><w:sz w:val="18"/><w:color w:val="FFFFFF"/></w:rPr><w:t>Tour Leader</w:t></w:r></w:p></w:tc>
 </w:tr>
 <w:tr>
-<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${group.groupNumber || "-"}</w:t></w:r></w:p></w:tc>
-<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${group.groupName || "-"}</w:t></w:r></w:p></w:tc>
-<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${group.adultPax}</w:t></w:r></w:p></w:tc>
-<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${group.childPax}</w:t></w:r></w:p></w:tc>
-<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${group.totalPax}</w:t></w:r></w:p></w:tc>
-<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${group.tourLeader || "-"}</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(group.groupNumber || "-")}</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(group.groupName || "-")}</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(group.adultPax)}</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(group.childPax)}</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(group.totalPax)}</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${esc(group.tourLeader || "-")}</w:t></w:r></w:p></w:tc>
 </w:tr>
 </w:tbl>
 <w:p/>
@@ -232,6 +249,57 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // ── Authentication / authorization gate ──
+    // This function holds the service role key, so it MUST establish the caller's
+    // identity and permission BEFORE parsing input or writing anything.
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabase = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    if (!token) {
+      return json({ error: "Authentication required." }, 401);
+    }
+
+    const { data: userData, error: userError } = await supabase.auth.getUser(token);
+    const authedUser = userData?.user;
+    if (userError || !authedUser) {
+      return json({ error: "Authentication required." }, 401);
+    }
+
+    const { data: actorProfile, error: actorProfileError } = await supabase
+      .from("profiles")
+      .select("id, full_name, role, is_active")
+      .eq("id", authedUser.id)
+      .maybeSingle();
+
+    if (actorProfileError || !actorProfile) {
+      console.error("Itinerary actor profile lookup failed:", actorProfileError);
+      return json({ error: "You do not have permission to perform this action." }, 403);
+    }
+
+    if (actorProfile.is_active === false) {
+      return json({ error: "This account is not active." }, 403);
+    }
+
+    const PERMITTED_ITINERARY_ROLES = new Set([
+      "platform_owner",
+      "super_admin",
+      "admin",
+      "operations_manager",
+      "operations_staff",
+    ]);
+
+    if (!PERMITTED_ITINERARY_ROLES.has(String(actorProfile.role))) {
+      return json({ error: "You do not have permission to perform this action." }, 403);
+    }
+
+    const generatedBy: string = actorProfile.id;
+    const generatedByName: string = actorProfile.full_name ?? authedUser.email ?? "";
+
     const body: ItineraryRequest = await req.json();
 
     if (!body.group?.groupName) {
@@ -277,13 +345,6 @@ Deno.serve(async (req: Request) => {
     const zipBytes = buildZip(files);
     const base64 = base64Encode(zipBytes);
 
-    // Save to database
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const supabase = createClient(supabaseUrl, serviceKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
     const fileName = `itinerary_${body.group.groupName.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}.docx`;
     const filePath = `flight-itineraries/${fileName}`;
 
@@ -299,25 +360,6 @@ Deno.serve(async (req: Request) => {
     if (uploadError) {
       console.error("Storage upload failed, saving path as reference only:", uploadError);
       savedPath = `local:${fileName}`;
-    }
-
-    // Get auth info
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const token = authHeader.replace(/^Bearer\s+/i, "");
-    let generatedBy = null;
-    let generatedByName = "";
-    if (token) {
-      const { data: { user } } = await supabase.auth.getUser(token);
-      if (user) {
-        generatedBy = user.id;
-        generatedByName = user.email ?? "";
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("full_name")
-          .eq("id", user.id)
-          .maybeSingle();
-        if (profile?.full_name) generatedByName = profile.full_name;
-      }
     }
 
     // Save record to database
@@ -353,7 +395,7 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     console.error("DOCX generation error:", err);
-    return json({ error: err instanceof Error ? err.message : "DOCX generation failed" }, 500);
+    return json({ error: "The itinerary document could not be generated. Please try again." }, 500);
   }
 });
 

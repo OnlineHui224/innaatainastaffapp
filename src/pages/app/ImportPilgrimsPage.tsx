@@ -1,19 +1,13 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ArrowLeft,
-  Upload,
-  FileSpreadsheet,
-  Users,
-  CheckCircle2,
-  AlertCircle,
   AlertTriangle,
-  Loader2,
-  XCircle,
   Building2,
-  Trash2,
-  Plus,
   ShieldCheck,
+  Trash2,
+  Upload,
+  Users,
+  XCircle,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
@@ -21,6 +15,14 @@ import { logAudit } from '@/lib/audit';
 import { friendlyError } from '@/lib/validation';
 import type { SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { Alert } from '@/components/ui/Alert';
+import { Badge } from '@/components/ui/Badge';
+import { Button, ButtonLink } from '@/components/ui/Button';
+import { Identifier, Select } from '@/components/ui/Field';
+import { LoadingBlock } from '@/components/ui/Feedback';
+import { Panel } from '@/components/ui/Panel';
+import { ImportStages, OutcomeTile } from '@/components/imports/ImportStages';
 import {
   parseVerifiedCsv,
   computeTotals,
@@ -38,6 +40,14 @@ import {
 } from '@/lib/verifiedImport';
 
 type Phase = 'upload' | 'analyzing' | 'preview' | 'executing' | 'complete';
+
+const VERIFIED_STAGES = [
+  { key: 'upload', label: 'Verify file' },
+  { key: 'analyse', label: 'Analyse' },
+  { key: 'plan', label: 'Execution plan' },
+  { key: 'execute', label: 'Execute' },
+  { key: 'result', label: 'Result' },
+];
 
 interface ExistingPilgrimLite {
   id: string;
@@ -78,6 +88,7 @@ export default function ImportPilgrimsPage() {
   const [existingDups, setExistingDups] = useState<DuplicateCheck[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [confirmExecute, setConfirmExecute] = useState(false);
 
   const handleFile = useCallback(async (file: File) => {
     setError(null);
@@ -504,47 +515,77 @@ export default function ImportPilgrimsPage() {
     setExistingDups([]);
     setError(null);
     setResult(null);
+    setConfirmExecute(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+
+  const stageIndex =
+    phase === 'upload'
+      ? 0
+      : phase === 'analyzing'
+        ? 1
+        : phase === 'preview'
+          ? 2
+          : phase === 'executing'
+            ? 3
+            : 4;
+
   return (
     <div>
-      <Link to="/app/pilgrims" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-        <ArrowLeft className="h-4 w-4" /> Back to Pilgrims
-      </Link>
-
       <PageHeader
+        eyebrow="Specialised execution"
         title="Verified Pilgrim Import"
-        subtitle="One-time import of verified pilgrim data from CSV"
-        icon={<ShieldCheck className="h-6 w-6" />}
+        subtitle="A one-time, file-verified execution of a prepared pilgrim dataset. This is not the routine CSV import — it checks the file against expected totals, removes demo data and executes in a single pass."
       />
 
+      {/* This module stays deliberately separate from the routine Import CSV
+          workflow. It is reachable by URL only and is never placed in the
+          sidebar navigation. */}
+      <Alert tone="warning" title="Specialised execution module" className="mb-6">
+        This screen executes a prepared, pre-verified dataset. For day-to-day intake use{' '}
+        <Link to="/app/pilgrims/import-csv" className="font-semibold underline">
+          Import CSV
+        </Link>{' '}
+        instead, which reviews each row before anything is written.
+      </Alert>
+
+      <ImportStages stages={VERIFIED_STAGES} currentIndex={stageIndex} className="mb-6" />
+
       {error && (
-        <div className="mb-6 flex items-start gap-3 rounded-xl bg-red-50 border border-red-200 p-5">
-          <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-          <p className="text-sm text-red-700 whitespace-pre-line">{error}</p>
-        </div>
+        <Alert tone="critical" title="Execution halted" className="mb-6">
+          <span className="whitespace-pre-line">{error}</span>
+        </Alert>
       )}
 
-      {/* Upload Phase */}
+      {/* ── Stage 1 — file verification ─────────────────────────────── */}
       {phase === 'upload' && (
-        <div className="space-y-6">
+        <div className="space-y-5">
           <div
             onClick={() => fileInputRef.current?.click()}
-            className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-12 text-center hover:border-brand-400 hover:bg-brand-50/40 transition-all"
+            onDrop={(e) => {
+              e.preventDefault();
+              const f = e.dataTransfer.files?.[0];
+              if (f) handleFile(f);
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            className="cursor-pointer rounded-lg border-2 border-dashed border-slate-300 bg-white p-10 text-center transition-colors hover:border-brand-500 hover:bg-brand-50/30"
           >
-            <Upload className="h-12 w-12 text-slate-300 mx-auto mb-4" />
-            <p className="font-display font-bold text-base text-slate-700">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-md border border-slate-300 bg-slate-50 text-slate-500">
+              <Upload className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <p className="mt-4 font-display text-sm font-bold text-navy-900">
               Upload the verified pilgrims CSV file
             </p>
-            <p className="mt-2 text-sm text-slate-400">
-              The file will be verified against expected totals before any processing occurs
+            <p className="mt-1.5 text-sm text-slate-600">
+              The file is checked against the expected totals before any processing occurs.
             </p>
             <input
               ref={fileInputRef}
               type="file"
               accept=".csv"
-              className="hidden"
+              className="sr-only"
+              aria-label="Upload the verified pilgrims CSV file"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) handleFile(f);
@@ -552,169 +593,140 @@ export default function ImportPilgrimsPage() {
             />
           </div>
 
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
-            <h3 className="font-display font-bold text-sm text-amber-900 mb-3 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" /> Expected File Totals
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="rounded-lg bg-white p-3 text-center">
-                <p className="text-2xl font-display font-extrabold text-amber-700">493</p>
-                <p className="text-xs text-amber-600">Total Rows</p>
-              </div>
-              <div className="rounded-lg bg-white p-3 text-center">
-                <p className="text-2xl font-display font-extrabold text-emerald-700">468</p>
-                <p className="text-xs text-emerald-600">READY</p>
-              </div>
-              <div className="rounded-lg bg-white p-3 text-center">
-                <p className="text-2xl font-display font-extrabold text-orange-700">25</p>
-                <p className="text-xs text-orange-600">REVIEW</p>
-              </div>
-              <div className="rounded-lg bg-white p-3 text-center">
-                <p className="text-2xl font-display font-extrabold text-brand-700">48</p>
-                <p className="text-xs text-brand-600">Agent Keys</p>
-              </div>
+          <Panel
+            edge="caution"
+            title="Expected file totals"
+            description="If the uploaded file does not match these totals exactly, execution stops immediately and no data is changed."
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <OutcomeTile label="Total rows" value={493} tone="neutral" description="Expected in the file" />
+              <OutcomeTile label="READY" value={468} tone="ready" description="Execute directly" />
+              <OutcomeTile label="REVIEW" value={25} tone="review" description="To the review queue" />
+              <OutcomeTile label="Agent keys" value={48} tone="info" description="Unique agent keys" />
             </div>
-            <p className="mt-3 text-xs text-amber-700/80">
-              If the file totals do not match, the import will stop immediately. No data will be changed.
-            </p>
-          </div>
+          </Panel>
         </div>
       )}
 
-      {/* Analyzing Phase */}
-      {phase === 'analyzing' && (
-        <div className="flex flex-col items-center justify-center py-20">
-          <Loader2 className="h-10 w-10 animate-spin text-brand-500" />
-          <p className="mt-4 font-display font-bold text-base text-slate-700">Analyzing file...</p>
-          <p className="mt-1 text-sm text-slate-400">Verifying totals, matching agents, detecting duplicates</p>
-        </div>
-      )}
+      {/* ── Stage 2 — analysing ─────────────────────────────────────── */}
+      {phase === 'analyzing' && <LoadingBlock label="Verifying totals, matching agents and detecting duplicates…" />}
 
-      {/* Preview Phase */}
+      {/* ── Stage 3 — execution plan ────────────────────────────────── */}
       {phase === 'preview' && (
         <div className="space-y-6">
-          {/* File verification banner */}
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="h-6 w-6 text-emerald-600 shrink-0" />
-              <div>
-                <p className="font-display font-bold text-sm text-emerald-900">File Verified</p>
-                <p className="text-xs text-emerald-700 mt-0.5">
-                  {fileName} — {totals.totalRows} rows, {totals.readyRows} READY, {totals.reviewRows} REVIEW, {totals.uniqueAgentKeys} agent keys
-                </p>
-                <p className="text-xs text-emerald-600/60 mt-0.5 font-mono">SHA-256: {fileHash.slice(0, 16)}...</p>
-              </div>
+          <Alert tone="success" title="File verified">
+            {fileName} — {totals.totalRows} rows, {totals.readyRows} READY, {totals.reviewRows} REVIEW,{' '}
+            {totals.uniqueAgentKeys} agent keys.
+            <span className="mt-1 block text-xs">
+              SHA-256 <Identifier value={`${fileHash.slice(0, 16)}…`} />
+            </span>
+          </Alert>
+
+          <section aria-labelledby="verified-plan">
+            <h2
+              id="verified-plan"
+              className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+            >
+              Execution plan
+            </h2>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+              <OutcomeTile label="Total CSV rows" value={totals.totalRows} tone="neutral" />
+              <OutcomeTile label="READY" value={previewSummary.readyToImport} tone="ready" description="Execute directly" />
+              <OutcomeTile label="REVIEW" value={previewSummary.reviewQueue} tone="review" description="To the review queue" />
+              <OutcomeTile
+                label="Duplicates skipped"
+                value={previewSummary.duplicatesSkipped}
+                tone="blocked"
+                description="Passport already present"
+              />
+              <OutcomeTile label="Agents matched" value={previewSummary.matched} tone="ready" />
+              <OutcomeTile label="New agents" value={previewSummary.newAgents} tone="info" />
             </div>
-          </div>
+          </section>
 
-          {/* Summary stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-            <StatCard label="Total CSV Rows" value={totals.totalRows} icon={FileSpreadsheet} color="text-slate-600 bg-slate-50" />
-            <StatCard label="READY to Import" value={previewSummary.readyToImport} icon={CheckCircle2} color="text-emerald-600 bg-emerald-50" />
-            <StatCard label="REVIEW Queue" value={previewSummary.reviewQueue} icon={AlertTriangle} color="text-orange-600 bg-orange-50" />
-            <StatCard label="Duplicates Skipped" value={previewSummary.duplicatesSkipped} icon={XCircle} color="text-amber-600 bg-amber-50" />
-            <StatCard label="Agents Matched" value={previewSummary.matched} icon={Building2} color="text-brand-600 bg-brand-50" />
-            <StatCard label="New Agents" value={previewSummary.newAgents} icon={Plus} color="text-indigo-600 bg-indigo-50" />
-          </div>
-
-          {/* Ambiguous agents warning */}
           {hasAmbiguous && (
-            <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-display font-bold text-sm text-amber-900">
-                    {previewSummary.ambiguous} agent(s) require your decision
-                  </p>
-                  <p className="text-xs text-amber-700 mt-1">
-                    These CSV agents have similar existing agent names. You must decide whether they are the same agent or genuinely new.
-                    The import button will be disabled until all ambiguous agents are resolved.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <Alert
+              tone="warning"
+              title={`${previewSummary.ambiguous} agent${previewSummary.ambiguous === 1 ? '' : 's'} require your decision`}
+            >
+              These CSV agent names partially match existing sub-agents. Execution stays disabled until each one
+              is resolved — the system will not choose on your behalf.
+            </Alert>
           )}
 
-          {/* Demo Data Removal Section */}
+          {/* Demo data removal */}
           {(demoAgents.length > 0 || demoPilgrims.length > 0 || suspectedRecords.length > 0) && (
-            <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-              <h3 className="font-display font-bold text-base text-slate-900 mb-4 flex items-center gap-2">
-                <Trash2 className="h-5 w-5 text-red-500" />
-                Demo Data Removal
-              </h3>
-
-              {demoAgents.length > 0 && (
-                <div className="mb-5">
-                  <p className="text-sm font-semibold text-slate-700 mb-2">
-                    Demo/sample agents — will be removed automatically ({demoAgents.length})
-                  </p>
-                  <div className="space-y-2">
-                    {demoAgents.map((d) => (
-                      <div key={d.id} className="flex items-center gap-3 rounded-lg bg-red-50 px-4 py-2.5">
-                        <XCircle className="h-4 w-4 text-red-500 shrink-0" />
-                        <span className="text-sm font-medium text-slate-900">{d.name}</span>
-                        <span className="text-xs text-slate-400 ml-auto">{d.reason}</span>
-                      </div>
-                    ))}
+            <Panel
+              edge="critical"
+              title={
+                <span className="flex items-center gap-2">
+                  <Trash2 className="h-4 w-4 text-red-700" aria-hidden="true" />
+                  Demo data removal
+                </span>
+              }
+              description="Executed before the import so demo records cannot be confused with verified operational data."
+            >
+              <div className="space-y-5">
+                {demoAgents.length > 0 && (
+                  <DemoGroup
+                    title={`Demo or sample agents — removed automatically (${demoAgents.length})`}
+                    records={demoAgents}
+                  />
+                )}
+                {demoPilgrims.length > 0 && (
+                  <DemoGroup
+                    title={`Demo or sample pilgrims — removed automatically (${demoPilgrims.length})`}
+                    records={demoPilgrims}
+                  />
+                )}
+                {suspectedRecords.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-sm font-semibold text-slate-800">
+                      Suspected demo records — confirm each removal ({suspectedRecords.length})
+                    </p>
+                    <ul className="space-y-1.5">
+                      {suspectedRecords.map((d) => (
+                        <li key={d.id}>
+                          <label className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-300 bg-white px-3 py-2 transition-colors hover:bg-slate-50">
+                            <input
+                              type="checkbox"
+                              checked={suspectedRemovals.has(d.id)}
+                              onChange={() => toggleSuspectedRemoval(d.id)}
+                              className="h-4 w-4 shrink-0 rounded border-slate-400"
+                            />
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
+                              {d.name}
+                            </span>
+                            <span className="shrink-0 text-xs text-slate-500">{d.reason}</span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-              )}
-
-              {demoPilgrims.length > 0 && (
-                <div className="mb-5">
-                  <p className="text-sm font-semibold text-slate-700 mb-2">
-                    Demo/sample pilgrims — will be removed automatically ({demoPilgrims.length})
-                  </p>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {demoPilgrims.map((d) => (
-                      <div key={d.id} className="flex items-center gap-3 rounded-lg bg-red-50 px-4 py-2.5">
-                        <XCircle className="h-4 w-4 text-red-500 shrink-0" />
-                        <span className="text-sm font-medium text-slate-900">{d.name}</span>
-                        <span className="text-xs text-slate-400 ml-auto">{d.reason}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {suspectedRecords.length > 0 && (
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 mb-2">
-                    Suspected demo records — confirm removal for each ({suspectedRecords.length})
-                  </p>
-                  <div className="space-y-2">
-                    {suspectedRecords.map((d) => (
-                      <label key={d.id} className="flex items-center gap-3 rounded-lg bg-slate-50 px-4 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={suspectedRemovals.has(d.id)}
-                          onChange={() => toggleSuspectedRemoval(d.id)}
-                          className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-400"
-                        />
-                        <span className="text-sm font-medium text-slate-900">{d.name}</span>
-                        <span className="text-xs text-slate-400 ml-auto">{d.reason}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            </Panel>
           )}
 
-          {/* Agent Mapping Section */}
-          <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-            <h3 className="font-display font-bold text-base text-slate-900 mb-4 flex items-center gap-2">
-              <Building2 className="h-5 w-5 text-brand-500" />
-              Agent Mapping ({agentMatches.size} unique agents)
-            </h3>
-
-            <div className="flex flex-wrap gap-3 mb-5">
-              <StatusChip label="Matched" count={previewSummary.matched} color="emerald" />
-              <StatusChip label="New Agents" count={previewSummary.newAgents} color="indigo" />
-              <StatusChip label="Ambiguous" count={previewSummary.ambiguous} color="amber" />
+          {/* Agent mapping */}
+          <Panel
+            title={
+              <span className="flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                Agent mapping ({agentMatches.size} unique agents)
+              </span>
+            }
+            description="Matched, new and ambiguous agents. Ambiguous entries must be resolved before execution."
+          >
+            <div className="mb-4 flex flex-wrap gap-2">
+              <Badge tone="positive" treatment="solid">
+                {previewSummary.matched} matched
+              </Badge>
+              <Badge tone="info">{previewSummary.newAgents} new</Badge>
+              <Badge tone="caution">{previewSummary.ambiguous} ambiguous</Badge>
             </div>
 
-            <div className="space-y-2 max-h-[600px] overflow-y-auto">
+            <div className="max-h-[36rem] space-y-2 overflow-y-auto scrollbar-thin">
               {Array.from(agentMatches.values())
                 .sort((a, b) => {
                   const order = { ambiguous: 0, new: 1, matched: 2 };
@@ -729,208 +741,230 @@ export default function ImportPilgrimsPage() {
                   />
                 ))}
             </div>
-          </div>
+          </Panel>
 
-          {/* Duplicate Detection Section */}
+          {/* Duplicates */}
           {(internalDups.length > 0 || existingDups.length > 0) && (
-            <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-              <h3 className="font-display font-bold text-base text-slate-900 mb-4 flex items-center gap-2">
-                <XCircle className="h-5 w-5 text-amber-500" />
-                Duplicate Detection
-              </h3>
-
-              {existingDups.length > 0 && (
-                <div className="mb-4">
-                  <p className="text-sm font-semibold text-slate-700 mb-2">
-                    Passport numbers already in HajjERP — will be skipped ({existingDups.length})
-                  </p>
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                    {existingDups.map((d, i) => (
-                      <div key={i} className="flex items-center gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm">
-                        <span className="font-mono text-xs text-slate-600">{d.passportNumber}</span>
-                        <span className="text-slate-500">Row {d.csvRow}</span>
-                        <span className="text-slate-400 ml-auto">Existing: {d.existingPilgrimName}</span>
-                      </div>
-                    ))}
+            <Panel
+              edge="critical"
+              title={
+                <span className="flex items-center gap-2">
+                  <XCircle className="h-4 w-4 text-red-700" aria-hidden="true" />
+                  Duplicate detection
+                </span>
+              }
+              description="Blocked rows. These passports will not be executed."
+            >
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                {existingDups.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-sm font-semibold text-slate-800">
+                      Already present in HajjERP — skipped ({existingDups.length})
+                    </p>
+                    <ul className="max-h-44 space-y-1.5 overflow-y-auto scrollbar-thin">
+                      {existingDups.map((d, i) => (
+                        <li
+                          key={`${d.passportNumber}-${i}`}
+                          className="flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                        >
+                          <Identifier value={d.passportNumber} />
+                          <span className="text-xs text-slate-500">Row {d.csvRow}</span>
+                          <span className="ml-auto text-xs text-slate-600">
+                            Existing: {d.existingPilgrimName}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-              )}
-
-              {internalDups.length > 0 && (
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 mb-2">
-                    Duplicate passports within CSV — will be skipped ({internalDups.length})
-                  </p>
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                    {internalDups.map((d, i) => (
-                      <div key={i} className="flex items-center gap-3 rounded-lg bg-orange-50 px-3 py-2 text-sm">
-                        <span className="font-mono text-xs text-slate-600">{d.passportNumber}</span>
-                        <span className="text-slate-500">Row {d.csvRow}</span>
-                      </div>
-                    ))}
+                )}
+                {internalDups.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-sm font-semibold text-slate-800">
+                      Duplicated within this CSV — skipped ({internalDups.length})
+                    </p>
+                    <ul className="max-h-44 space-y-1.5 overflow-y-auto scrollbar-thin">
+                      {internalDups.map((d, i) => (
+                        <li
+                          key={`${d.passportNumber}-${i}`}
+                          className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                        >
+                          <Identifier value={d.passportNumber} />
+                          <span className="text-xs text-slate-500">Row {d.csvRow}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Review Queue Section */}
-          {totals.reviewRows > 0 && (
-            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-5">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-orange-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-display font-bold text-sm text-orange-900">
-                    {totals.reviewRows} rows will be placed in the Import Review Queue
-                  </p>
-                  <p className="text-xs text-orange-700 mt-1">
-                    These rows have review reasons (invalid dates, missing names, duplicate visas, etc.) and will not be imported as active pilgrim records.
-                    They will be stored with all original values for correction and approval later — no re-upload needed.
-                  </p>
-                </div>
+                )}
               </div>
-            </div>
+            </Panel>
           )}
 
-          {/* Action bar */}
-          <div className="sticky bottom-0 z-10 flex items-center justify-between rounded-2xl border border-slate-200 bg-white/95 backdrop-blur p-4 shadow-lg">
-            <div className="text-sm text-slate-500">
+          {totals.reviewRows > 0 && (
+            <Alert tone="warning" title={`${totals.reviewRows} rows will be placed in the Import Review Queue`}>
+              These rows carry a REVIEW reason — an invalid date, a missing name, a duplicate visa. They are
+              stored with all their original values for correction and approval later. Nothing is discarded and
+              no re-upload is needed.
+            </Alert>
+          )}
+
+          {/* Execute */}
+          <div className="sticky bottom-0 z-10 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white/95 p-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm leading-relaxed text-slate-700">
               {hasAmbiguous ? (
-                <span className="flex items-center gap-2 text-amber-600 font-medium">
-                  <AlertTriangle className="h-4 w-4" />
-                  Resolve {previewSummary.ambiguous} ambiguous agent(s) first
+                <span className="flex items-center gap-2 font-medium text-amber-900">
+                  <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  Resolve {previewSummary.ambiguous} ambiguous agent
+                  {previewSummary.ambiguous === 1 ? '' : 's'} before executing
                 </span>
               ) : (
-                <span>
-                  Ready: <strong className="text-slate-900">{previewSummary.readyToImport}</strong> pilgrims,
-                  {' '}<strong className="text-slate-900">{previewSummary.newAgents}</strong> new agents,
-                  {' '}<strong className="text-slate-900">{totals.reviewRows}</strong> to review queue
-                </span>
+                <>
+                  <span className="font-bold tabular-nums text-emerald-900">
+                    {previewSummary.readyToImport}
+                  </span>{' '}
+                  READY ·{' '}
+                  <span className="font-bold tabular-nums text-brand-900">{previewSummary.newAgents}</span> new
+                  agents ·{' '}
+                  <span className="font-bold tabular-nums text-amber-900">{totals.reviewRows}</span> to review
+                </>
               )}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" onClick={reset}>
+                Cancel
+              </Button>
+              <Button
+                variant="critical"
+                onClick={() => setConfirmExecute(true)}
+                disabled={hasAmbiguous}
+                icon={<ShieldCheck className="h-4 w-4" aria-hidden="true" />}
+              >
+                Remove demo data and execute import
+              </Button>
             </div>
-            <button
-              onClick={executeImport}
-              disabled={hasAmbiguous}
-              className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-brand-900/20 hover:bg-brand-600 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <ShieldCheck className="h-4 w-4" />
-              Remove Demo Data and Import Verified Pilgrims
-            </button>
           </div>
         </div>
       )}
 
-      {/* Executing Phase */}
+      {/* ── Stage 4 — executing ─────────────────────────────────────── */}
       {phase === 'executing' && (
-        <div className="flex flex-col items-center justify-center py-20">
-          <Loader2 className="h-10 w-10 animate-spin text-brand-500" />
-          <p className="mt-4 font-display font-bold text-base text-slate-700">Executing import...</p>
-          <p className="mt-1 text-sm text-slate-400">Removing demo data, creating agents, importing pilgrims. Do not close this page.</p>
+        <div>
+          <LoadingBlock label="Executing import — do not close this page…" />
+          <p className="text-center text-sm text-slate-600">
+            Removing demo data, creating agents and importing pilgrim records.
+          </p>
         </div>
       )}
 
-      {/* Complete Phase */}
+      {/* ── Stage 5 — result ────────────────────────────────────────── */}
       {phase === 'complete' && result && (
         <div className="space-y-6">
-          <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm text-center">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50">
-              <CheckCircle2 className="h-8 w-8 text-emerald-600" />
-            </div>
-            <h3 className="mt-5 font-display font-bold text-xl text-slate-900">Import Complete</h3>
-            <p className="mt-2 text-sm text-slate-500">
-              {result.pilgrimsCreated} pilgrims imported, {result.reviewQueued} queued for review
-            </p>
+          <Alert
+            tone={result.failedRows.length > 0 ? 'warning' : 'success'}
+            title={
+              result.failedRows.length > 0
+                ? 'Execution finished with failures'
+                : `Execution complete — ${result.pilgrimsCreated} pilgrims imported`
+            }
+          >
+            {result.pilgrimsCreated} pilgrims imported, {result.reviewQueued} queued for review
+            {result.failedRows.length > 0 ? `, ${result.failedRows.length} rows failed.` : '.'}
+          </Alert>
 
-            <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
-              <ResultCard label="Pilgrims Created" value={result.pilgrimsCreated} color="emerald" />
-              <ResultCard label="New Agents Created" value={result.agentsCreated} color="indigo" />
-              <ResultCard label="Agents Matched" value={result.agentsMatched} color="brand" />
-              <ResultCard label="Duplicates Skipped" value={result.duplicatesSkipped} color="amber" />
-              <ResultCard label="Review Queue" value={result.reviewQueued} color="orange" />
-              <ResultCard label="Demo Agents Removed" value={result.demoAgentsRemoved} color="red" />
-              <ResultCard label="Demo Pilgrims Removed" value={result.demoPilgrimsRemoved} color="red" />
-              <ResultCard label="Failed Rows" value={result.failedRows.length} color="red" />
-            </div>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <OutcomeTile label="Pilgrims created" value={result.pilgrimsCreated} tone="ready" />
+            <OutcomeTile label="New agents created" value={result.agentsCreated} tone="info" />
+            <OutcomeTile label="Agents matched" value={result.agentsMatched} tone="ready" />
+            <OutcomeTile label="Duplicates skipped" value={result.duplicatesSkipped} tone="blocked" />
+            <OutcomeTile label="Review queue" value={result.reviewQueued} tone="review" />
+            <OutcomeTile label="Demo agents removed" value={result.demoAgentsRemoved} tone="blocked" />
+            <OutcomeTile label="Demo pilgrims removed" value={result.demoPilgrimsRemoved} tone="blocked" />
+            <OutcomeTile label="Failed rows" value={result.failedRows.length} tone="blocked" />
           </div>
 
           {result.failedRows.length > 0 && (
-            <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
-              <h3 className="font-display font-bold text-sm text-red-900 mb-3 flex items-center gap-2">
-                <AlertCircle className="h-4 w-4" /> Failed Rows ({result.failedRows.length})
-              </h3>
-              <div className="max-h-60 overflow-y-auto space-y-1.5">
+            <Panel
+              edge="critical"
+              title={`Failed rows (${result.failedRows.length})`}
+              description="These rows were not imported. Nothing about them was silently discarded — each failure is listed here and in the audit history."
+            >
+              <ul className="max-h-64 space-y-1.5 overflow-y-auto scrollbar-thin">
                 {result.failedRows.map((f, i) => (
-                  <p key={i} className="text-sm text-red-700">
-                    Row {f.row} ({f.name}): {f.reason}
-                  </p>
+                  <li
+                    key={`${f.row}-${i}`}
+                    className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+                  >
+                    <span className="font-medium">Row {f.row}</span> ({f.name}): {f.reason}
+                  </li>
                 ))}
-              </div>
-            </div>
+              </ul>
+            </Panel>
           )}
 
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={reset}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
-            >
-              <Upload className="h-4 w-4" /> Import Another File
-            </button>
-            <Link
-              to="/app/pilgrims"
-              className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-900/20 hover:bg-brand-600 transition-all"
-            >
-              <Users className="h-4 w-4" /> View All Pilgrims
-            </Link>
+          <div className="flex flex-wrap gap-2">
+            <ButtonLink to="/app/pilgrims" icon={<Users className="h-4 w-4" aria-hidden="true" />}>
+              View all pilgrims
+            </ButtonLink>
+            {result.reviewQueued > 0 && (
+              <ButtonLink to="/app/pilgrims/review-queue" variant="secondary">
+                Open Review Queue ({result.reviewQueued})
+              </ButtonLink>
+            )}
+            <Button variant="secondary" onClick={reset} icon={<Upload className="h-4 w-4" aria-hidden="true" />}>
+              Import another file
+            </Button>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmExecute}
+        critical
+        title="Execute verified import"
+        confirmLabel={`Execute for ${previewSummary.readyToImport} READY Rows`}
+        loading={phase === 'executing'}
+        onCancel={() => setConfirmExecute(false)}
+        onConfirm={() => {
+          setConfirmExecute(false);
+          executeImport();
+        }}
+        message={
+          <>
+            This removes the demo records listed above, creates{' '}
+            <strong className="tabular-nums">{previewSummary.newAgents}</strong> new agents, imports{' '}
+            <strong className="tabular-nums">{previewSummary.readyToImport}</strong> READY rows and queues{' '}
+            <strong className="tabular-nums">{totals.reviewRows}</strong> REVIEW rows. Demo-record deletion
+            cannot be undone. The whole execution is recorded in the audit history.
+          </>
+        }
+      />
     </div>
   );
 }
 
-function StatCard({ label, value, icon: Icon, color }: { label: string; value: number; icon: React.ElementType; color: string }) {
+function DemoGroup({ title, records }: { title: string; records: DemoRecord[] }) {
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
-      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${color}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <p className="mt-3 text-2xl font-display font-extrabold text-slate-900">{value}</p>
-      <p className="text-xs text-slate-400 mt-0.5">{label}</p>
+    <div>
+      <p className="mb-2 text-sm font-semibold text-slate-800">{title}</p>
+      <ul className="max-h-44 space-y-1.5 overflow-y-auto scrollbar-thin">
+        {records.map((d) => (
+          <li
+            key={d.id}
+            className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm"
+          >
+            <XCircle className="h-4 w-4 shrink-0 text-red-700" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate font-medium text-slate-900">{d.name}</span>
+            <span className="shrink-0 text-xs text-slate-600">{d.reason}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
 
-function StatusChip({ label, count, color }: { label: string; count: number; color: 'emerald' | 'indigo' | 'amber' }) {
-  const colors = {
-    emerald: 'bg-emerald-50 text-emerald-700',
-    indigo: 'bg-indigo-50 text-indigo-700',
-    amber: 'bg-amber-50 text-amber-700',
-  };
-  return (
-    <div className={`flex items-center gap-2 rounded-xl px-3 py-2 ${colors[color]}`}>
-      <span className="text-sm font-semibold">{count}</span>
-      <span className="text-xs font-medium">{label}</span>
-    </div>
-  );
-}
-
-function ResultCard({ label, value, color }: { label: string; value: number; color: 'emerald' | 'indigo' | 'brand' | 'amber' | 'orange' | 'red' }) {
-  const colors = {
-    emerald: 'bg-emerald-50 text-emerald-700',
-    indigo: 'bg-indigo-50 text-indigo-700',
-    brand: 'bg-brand-50 text-brand-700',
-    amber: 'bg-amber-50 text-amber-700',
-    orange: 'bg-orange-50 text-orange-700',
-    red: 'bg-red-50 text-red-700',
-  };
-  return (
-    <div className={`rounded-xl p-4 ${colors[color]}`}>
-      <p className="text-3xl font-display font-extrabold">{value}</p>
-      <p className="text-xs mt-1 opacity-80">{label}</p>
-    </div>
-  );
-}
-
+/**
+ * One agent key in the verified execution plan.
+ * Ambiguous entries block execution until an officer decides.
+ */
 function AgentMatchRow({
   entry,
   existingAgents,
@@ -940,77 +974,80 @@ function AgentMatchRow({
   existingAgents: SubAgent[];
   onResolve: (agentId: string | 'new') => void;
 }) {
-  const statusConfig = {
-    matched: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', label: 'Matched' },
-    new: { icon: Plus, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200', label: 'New Agent' },
-    ambiguous: { icon: AlertTriangle, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', label: 'Ambiguous' },
-  };
-  const cfg = statusConfig[entry.status];
-  const Icon = cfg.icon;
+  const tone =
+    entry.status === 'matched' ? 'border-emerald-300' : entry.status === 'new' ? 'border-brand-300' : 'border-amber-400';
 
   return (
-    <div className={`rounded-xl border ${cfg.border} ${cfg.bg} p-4`}>
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
+    <div className={`rounded-md border bg-white p-3.5 ${tone}`}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-slate-900">{entry.csvAgentName}</p>
-            <span className="text-xs font-mono text-slate-400 rounded bg-white/60 px-1.5 py-0.5">{entry.matchKey}</span>
-            <span className="text-xs font-medium text-slate-400">({entry.pilgrimCount} pilgrims)</span>
+            <Identifier value={entry.matchKey} />
+            <span className="text-xs tabular-nums text-slate-500">
+              {entry.pilgrimCount} {entry.pilgrimCount === 1 ? 'pilgrim' : 'pilgrims'}
+            </span>
           </div>
           {entry.matchedAgent && (
-            <p className="text-xs text-slate-600 mt-1">
-              → {entry.matchedAgent.organisation_name} · {entry.matchedAgent.country || 'No country'}
+            <p className="mt-1 text-sm text-slate-600">
+              Maps to {entry.matchedAgent.organisation_name}
+              {entry.matchedAgent.country ? ` · ${entry.matchedAgent.country}` : ' · no country recorded'}
             </p>
           )}
           {entry.status === 'ambiguous' && entry.similarAgents.length > 0 && (
-            <p className="text-xs text-amber-700 mt-1">
-              Similar existing: {entry.similarAgents.map((a) => a.organisation_name).join(', ')}
+            <p className="mt-1 text-sm text-amber-900">
+              Similar existing agents: {entry.similarAgents.map((a) => a.organisation_name).join(', ')}
             </p>
           )}
         </div>
-        <div className={`flex items-center gap-1.5 shrink-0 ${cfg.color}`}>
-          <Icon className="h-4 w-4" />
-          <span className="text-xs font-semibold hidden sm:inline">{cfg.label}</span>
+        <div className="shrink-0">
+          {entry.status === 'matched' && (
+            <Badge tone="positive" treatment="solid">
+              Matched
+            </Badge>
+          )}
+          {entry.status === 'new' && <Badge tone="info">New agent</Badge>}
+          {entry.status === 'ambiguous' && <Badge tone="caution">Ambiguous</Badge>}
         </div>
       </div>
 
       {entry.status !== 'matched' && (
-        <div className="mt-3 pt-3 border-t border-slate-200/60">
-          <p className="text-xs font-medium text-slate-500 mb-2">
+        <div className="mt-3 border-t border-slate-200 pt-3">
+          <label
+            htmlFor={`verified-agent-${entry.matchKey}`}
+            className="mb-1.5 block text-xs font-medium text-slate-600"
+          >
             {entry.status === 'ambiguous'
-              ? 'Select the correct existing agent, or confirm this is a genuinely new agent:'
-              : 'This agent will be created with ACTIVE status. Confirm or select an existing agent instead:'}
-          </p>
-          <div className="flex items-center gap-2">
-            <select
-              value={entry.matchedAgent?.id ?? (entry.isNew ? 'new' : '')}
-              onChange={(e) => onResolve(e.target.value)}
-              className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-            >
-              <option value="">— Select an existing agent —</option>
-              <option value="new">+ Create as new agent: "{entry.csvAgentName}"</option>
-              {existingAgents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.organisation_name} · {a.country || 'No country'}
-                </option>
-              ))}
-            </select>
-          </div>
+              ? 'Select the correct existing agent, or confirm this is genuinely new:'
+              : 'This agent will be created as ACTIVE. Confirm, or map it to an existing agent instead:'}
+          </label>
+          <Select
+            id={`verified-agent-${entry.matchKey}`}
+            value={entry.matchedAgent?.id ?? (entry.isNew ? 'new' : '')}
+            onChange={(e) => onResolve(e.target.value)}
+          >
+            <option value="">— Select an existing agent —</option>
+            <option value="new">Create as a new agent: “{entry.csvAgentName}”</option>
+            {existingAgents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.organisation_name} · {a.country || 'No country'}
+              </option>
+            ))}
+          </Select>
         </div>
       )}
 
       {entry.status === 'matched' && entry.manuallyResolved && (
-        <div className="mt-2 pt-2 border-t border-slate-200/60">
-          <p className="text-xs text-slate-500">
-            You can change this mapping:{' '}
-            <button
-              onClick={() => onResolve('new')}
-              className="text-brand-600 hover:text-brand-700 font-medium"
-            >
-              Create as new agent instead
-            </button>
-          </p>
-        </div>
+        <p className="mt-2 border-t border-slate-200 pt-2 text-xs text-slate-500">
+          Resolved manually.{' '}
+          <button
+            type="button"
+            onClick={() => onResolve('new')}
+            className="font-medium text-brand-700 hover:underline"
+          >
+            Create as a new agent instead
+          </button>
+        </p>
       )}
     </div>
   );

@@ -1,18 +1,18 @@
-import { useState, useRef, useCallback } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ArrowLeft,
-  Upload,
-  FileText,
-  Download,
-  Loader2,
   AlertTriangle,
-  CheckCircle2,
+  ArrowRight,
   Building2,
+  CheckCircle2,
+  ClipboardList,
   Copy,
+  Download,
   FileCheck,
-  ShieldCheck,
-  Sparkles,
+  FileText,
+  Upload,
+  UploadCloud,
+  XCircle,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
@@ -22,6 +22,15 @@ import { compareDates } from '@/lib/status';
 import type { SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { Alert } from '@/components/ui/Alert';
+import { Badge } from '@/components/ui/Badge';
+import { Button, ButtonLink } from '@/components/ui/Button';
+import { Identifier, Select } from '@/components/ui/Field';
+import { LoadingBlock } from '@/components/ui/Feedback';
+import { Panel } from '@/components/ui/Panel';
+import { TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
+import { ImportStages, OutcomeTile } from '@/components/imports/ImportStages';
+import { cn } from '@/lib/utils';
 
 // ============================================================
 // Types
@@ -49,6 +58,7 @@ interface AgentMatch {
   candidates: SubAgent[];
   isNew: boolean;
   isAmbiguous: boolean;
+  pilgrimCount: number;
 }
 
 interface ImportSummary {
@@ -61,8 +71,12 @@ interface ImportSummary {
   ambiguousAgents: number;
 }
 
+/** Explicit decision for an ambiguous agent. Defaults to the safe option. */
+const LEAVE_FOR_REVIEW = 'review';
+const CREATE_NEW = 'new';
+
 // ============================================================
-// CSV Template
+// CSV template
 // ============================================================
 
 const TEMPLATE_COLUMNS = [
@@ -79,7 +93,8 @@ const TEMPLATE_COLUMNS = [
 
 function downloadTemplate() {
   const header = TEMPLATE_COLUMNS.join(',');
-  const example1 = 'AHMED IBRAHIM,B12345678,V1234567890,SAHEED TRAVELS,2026-06-15,2026-07-05,LYN,Jeddah,Group leader';
+  const example1 =
+    'AHMED IBRAHIM,B12345678,V1234567890,SAHEED TRAVELS,2026-06-15,2026-07-05,LYN,Jeddah,Group leader';
   const example2 = 'FATIMAH BELLO,B87654321,V0987654321,NOKBAH TRAVELS,2026-06-20,2026-07-10,LYN,Jeddah,';
   const csv = `${header}\n${example1}\n${example2}\n`;
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -94,15 +109,11 @@ function downloadTemplate() {
 }
 
 // ============================================================
-// CSV Parsing & Validation
+// CSV parsing & validation — semantics unchanged by the redesign
 // ============================================================
 
 function normalizeAgentName(name: string): string {
-  return name
-    .trim()
-    .replace(/\s+/g, ' ')
-    .replace(/[.,]/g, '')
-    .toUpperCase();
+  return name.trim().replace(/\s+/g, ' ').replace(/[.,]/g, '').toUpperCase();
 }
 
 function parseCSVLine(line: string): string[] {
@@ -131,17 +142,14 @@ function parseCSVLine(line: string): string[] {
 
 function parseDateFlexible(value: string): string | null {
   if (!value.trim()) return null;
-  // Try YYYY-MM-DD
   const iso = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  // Try DD/MM/YYYY
   const dmy = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (dmy) {
     const day = dmy[1].padStart(2, '0');
     const month = dmy[2].padStart(2, '0');
     return `${dmy[3]}-${month}-${day}`;
   }
-  // Try MM/DD/YYYY
   const mdy = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mdy) {
     const month = mdy[1].padStart(2, '0');
@@ -151,14 +159,26 @@ function parseDateFlexible(value: string): string | null {
   return null;
 }
 
-function parseCSV(text: string, existingAgents: SubAgent[], existingPassports: Set<string>): {
-  rows: ParsedRow[];
-  agentMatches: AgentMatch[];
-  summary: ImportSummary;
-} {
+function parseCSV(
+  text: string,
+  existingAgents: SubAgent[],
+  existingPassports: Set<string>,
+): { rows: ParsedRow[]; agentMatches: AgentMatch[]; summary: ImportSummary } {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) {
-    return { rows: [], agentMatches: [], summary: { totalRows: 0, validRows: 0, reviewRows: 0, duplicateRows: 0, existingAgentsMatched: 0, newAgents: 0, ambiguousAgents: 0 } };
+    return {
+      rows: [],
+      agentMatches: [],
+      summary: {
+        totalRows: 0,
+        validRows: 0,
+        reviewRows: 0,
+        duplicateRows: 0,
+        existingAgentsMatched: 0,
+        newAgents: 0,
+        ambiguousAgents: 0,
+      },
+    };
   }
 
   const header = parseCSVLine(lines[0]).map((h) => h.toLowerCase().trim());
@@ -195,27 +215,22 @@ function parseCSV(text: string, existingAgents: SubAgent[], existingPassports: S
     const expectedReturn = parseDateFlexible(rawReturn) ?? '';
 
     const errors: string[] = [];
-
     if (!fullName.trim()) errors.push('Pilgrim name is required.');
     if (!passportNumber) errors.push('Passport number is required.');
     if (!agentName.trim()) errors.push('Agent name is required.');
     if (!scheduledOutbound) errors.push('Scheduled outbound date is missing or invalid.');
     if (!expectedReturn) errors.push('Expected return date is missing or invalid.');
-
     if (scheduledOutbound && expectedReturn && compareDates(expectedReturn, scheduledOutbound) < 0) {
       errors.push('Expected return date is before scheduled outbound date.');
     }
-
-    // Check duplicate passport within CSV
     if (passportNumber && passportSet.has(passportNumber)) {
       errors.push('Duplicate passport number within this CSV.');
     }
     if (passportNumber) passportSet.add(passportNumber);
 
-    // Check duplicate against existing database
-    const isDuplicate = passportNumber && existingPassports.has(passportNumber);
-
+    const isDuplicate = Boolean(passportNumber) && existingPassports.has(passportNumber);
     const status: ParsedRow['status'] = isDuplicate ? 'duplicate' : errors.length > 0 ? 'review' : 'valid';
+
     rows.push({
       rowIndex: i + 1,
       fullName,
@@ -231,13 +246,15 @@ function parseCSV(text: string, existingAgents: SubAgent[], existingPassports: S
       errors,
     });
 
-    // Track agent names
     if (agentName.trim()) {
       const normalized = normalizeAgentName(agentName);
-      if (!csvAgentNames.has(normalized)) {
+      const existing = csvAgentNames.get(normalized);
+      if (existing) {
+        existing.pilgrimCount += 1;
+      } else {
         const exact = existingAgents.find((a) => normalizeAgentName(a.organisation_name) === normalized);
         const internalCodeMatch = existingAgents.find(
-          (a) => a.internal_code && a.internal_code.toUpperCase() === normalized
+          (a) => a.internal_code && a.internal_code.toUpperCase() === normalized,
         );
         const candidates = existingAgents.filter((a) => {
           const agentNorm = normalizeAgentName(a.organisation_name);
@@ -251,6 +268,7 @@ function parseCSV(text: string, existingAgents: SubAgent[], existingPassports: S
           candidates: matched ? [] : candidates.slice(0, 3),
           isNew: !matched,
           isAmbiguous: !matched && candidates.length > 1,
+          pilgrimCount: 1,
         });
       }
     }
@@ -283,73 +301,95 @@ async function computeFileHash(text: string): Promise<string> {
 // Component
 // ============================================================
 
-type Phase = 'upload' | 'preview' | 'importing' | 'done';
+type Phase = 'upload' | 'analysing' | 'preview' | 'importing' | 'done';
+
+const STAGES = [
+  { key: 'upload', label: 'Upload file' },
+  { key: 'analyse', label: 'Analyse rows' },
+  { key: 'agents', label: 'Resolve agents' },
+  { key: 'confirm', label: 'Confirm & import' },
+  { key: 'result', label: 'Result' },
+];
 
 export default function ImportCsvPage() {
   const { profile } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
+
   const [phase, setPhase] = useState<Phase>('upload');
   const [fileName, setFileName] = useState('');
   const [fileHash, setFileHash] = useState('');
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [agentMatches, setAgentMatches] = useState<AgentMatch[]>([]);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
-  const [, setExistingAgents] = useState<SubAgent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [importResult, setImportResult] = useState<{ created: number; review: number; duplicates: number; agentsCreated: number; agentsMatched: number } | null>(null);
+  const [importResult, setImportResult] = useState<{
+    created: number;
+    review: number;
+    duplicates: number;
+    agentsCreated: number;
+    agentsMatched: number;
+    deferredAgents: number;
+    failed: number;
+  } | null>(null);
+  /**
+   * Ambiguous agents default to LEAVE_FOR_REVIEW. Staff are never nudged into a
+   * guess: rows under an unresolved ambiguous agent go to the Review Queue with
+   * the ambiguity recorded, instead of silently creating or picking an agent.
+   */
   const [ambiguousResolutions, setAmbiguousResolutions] = useState<Record<string, string>>({});
 
   const handleFile = useCallback(async (file: File) => {
     setError(null);
-    if (!file.name.endsWith('.csv')) {
-      setError('Please upload a .csv file.');
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setError(
+        `"${file.name}" is not a CSV file. This import accepts a .csv file only — export your spreadsheet as CSV and try again.`,
+      );
+      setPhase('upload');
       return;
     }
-    setPhase('upload');
+
     setFileName(file.name);
+    setPhase('analysing');
 
     try {
       const text = await file.text();
       const hash = await computeFileHash(text);
 
-      // Fetch existing agents and passports
       const [{ data: agents }, { data: pilgrims }] = await Promise.all([
         supabase.from('sub_agents').select('*').order('organisation_name'),
         supabase.from('pilgrims').select('passport_number'),
       ]);
 
       const existingPassports = new Set(
-        (pilgrims ?? []).map((p) => (p as { passport_number: string }).passport_number.toUpperCase())
+        (pilgrims ?? []).map((p) => (p as { passport_number: string }).passport_number.toUpperCase()),
       );
 
-      const { rows, agentMatches, summary } = parseCSV(
-        text,
-        (agents ?? []) as SubAgent[],
-        existingPassports
-      );
+      const parsed = parseCSV(text, (agents ?? []) as SubAgent[], existingPassports);
 
-      setRows(rows);
-      setAgentMatches(agentMatches);
-      setSummary(summary);
+      if (parsed.summary.totalRows === 0) {
+        setError(
+          'No pilgrim rows were found in this file. Check that it has a header row followed by at least one data row, then try again.',
+        );
+        setPhase('upload');
+        return;
+      }
+
+      setRows(parsed.rows);
+      setAgentMatches(parsed.agentMatches);
+      setSummary(parsed.summary);
       setFileHash(hash);
-      setExistingAgents((agents ?? []) as SubAgent[]);
+      setAmbiguousResolutions(
+        Object.fromEntries(
+          parsed.agentMatches.filter((m) => m.isAmbiguous).map((m) => [m.normalized, LEAVE_FOR_REVIEW]),
+        ),
+      );
       setPhase('preview');
     } catch (err) {
       setError(friendlyError(err));
+      setPhase('upload');
     }
   }, []);
-
-  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  }
-
-  function onDrop(e: React.DragEvent) {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleFile(file);
-  }
 
   function resetAll() {
     setPhase('upload');
@@ -364,78 +404,88 @@ export default function ImportCsvPage() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
+  /** Agent keys deferred to the Review Queue rather than guessed at. */
+  const deferredAgentKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const match of agentMatches) {
+      if (match.isAmbiguous && (ambiguousResolutions[match.normalized] ?? LEAVE_FOR_REVIEW) === LEAVE_FOR_REVIEW) {
+        keys.add(match.normalized);
+      }
+    }
+    return keys;
+  }, [agentMatches, ambiguousResolutions]);
+
+  /** Valid rows whose agent decision was deferred move to the Review Queue. */
+  const plan = useMemo(() => {
+    const valid = rows.filter((r) => r.status === 'valid');
+    const deferred = valid.filter((r) => deferredAgentKeys.has(normalizeAgentName(r.agentName)));
+    const ready = valid.filter((r) => !deferredAgentKeys.has(normalizeAgentName(r.agentName)));
+    const review = rows.filter((r) => r.status === 'review');
+    const duplicates = rows.filter((r) => r.status === 'duplicate');
+    return { ready, deferred, review, duplicates };
+  }, [rows, deferredAgentKeys]);
+
   async function handleConfirmImport() {
+    if (!summary) return;
     setPhase('importing');
     setConfirmOpen(false);
     setError(null);
 
     try {
       const batchId = crypto.randomUUID();
-      const validRows = rows.filter((r) => r.status === 'valid');
-      const reviewRows = rows.filter((r) => r.status === 'review');
-      const duplicateRows = rows.filter((r) => r.status === 'duplicate');
-
-      // Resolve agents: create new ones, use matched ones, resolve ambiguous
       const agentIdMap = new Map<string, string>();
       let agentsCreated = 0;
       let agentsMatched = 0;
+
+      async function createAgent(match: AgentMatch) {
+        const { data, error: createErr } = await supabase
+          .from('sub_agents')
+          .insert({
+            organisation_name: match.csvName,
+            // Placeholder contract retained deliberately — see deferred issues.
+            contact_person: 'To be updated',
+            country: 'Nigeria',
+            is_sample_data: false,
+            active_status: true,
+          })
+          .select('id')
+          .maybeSingle();
+        if (createErr) throw createErr;
+        if (data) {
+          agentIdMap.set(match.normalized, data.id);
+          agentsCreated++;
+        }
+      }
 
       for (const match of agentMatches) {
         if (match.existingAgent) {
           agentIdMap.set(match.normalized, match.existingAgent.id);
           agentsMatched++;
         } else if (match.isAmbiguous) {
-          const resolvedId = ambiguousResolutions[match.normalized];
-          if (resolvedId && resolvedId !== 'new') {
-            agentIdMap.set(match.normalized, resolvedId);
-            agentsMatched++;
+          const decision = ambiguousResolutions[match.normalized] ?? LEAVE_FOR_REVIEW;
+          if (decision === LEAVE_FOR_REVIEW) {
+            // No agent is created or guessed; the affected rows go to review.
+            continue;
+          }
+          if (decision === CREATE_NEW) {
+            await createAgent(match);
           } else {
-            // Create new agent
-            const { data, error: createErr } = await supabase
-              .from('sub_agents')
-              .insert({
-                organisation_name: match.csvName,
-                contact_person: 'To be updated',
-                country: 'Nigeria',
-                is_sample_data: false,
-                active_status: true,
-              })
-              .select('id')
-              .maybeSingle();
-            if (createErr) throw createErr;
-            if (data) {
-              agentIdMap.set(match.normalized, data.id);
-              agentsCreated++;
-            }
+            agentIdMap.set(match.normalized, decision);
+            agentsMatched++;
           }
         } else if (match.isNew) {
-          const { data, error: createErr } = await supabase
-            .from('sub_agents')
-            .insert({
-              organisation_name: match.csvName,
-              contact_person: 'To be updated',
-              country: 'Nigeria',
-              is_sample_data: false,
-              active_status: true,
-            })
-            .select('id')
-            .maybeSingle();
-          if (createErr) throw createErr;
-          if (data) {
-            agentIdMap.set(match.normalized, data.id);
-            agentsCreated++;
-          }
+          await createAgent(match);
         }
       }
 
-      // Insert valid pilgrims
       let created = 0;
-      for (const row of validRows) {
-        const agentNorm = normalizeAgentName(row.agentName);
-        const subAgentId = agentIdMap.get(agentNorm) ?? null;
+      let failed = 0;
+      for (const row of plan.ready) {
+        const subAgentId = agentIdMap.get(normalizeAgentName(row.agentName)) ?? null;
         const { error: insertErr } = await supabase.from('pilgrims').insert({
           full_name: row.fullName,
           passport_number: row.passportNumber,
+          // Known limitation: the normal importer has no nationality source.
           nationality: 'Nigeria',
           sub_agent_id: subAgentId,
           expected_departure_date: row.scheduledOutbound,
@@ -460,7 +510,7 @@ export default function ImportCsvPage() {
         });
         if (insertErr) {
           if (insertErr.message.includes('duplicate') || insertErr.message.includes('unique')) {
-            // Skip duplicate
+            failed++;
           } else {
             throw insertErr;
           }
@@ -469,9 +519,17 @@ export default function ImportCsvPage() {
         }
       }
 
-      // Queue review rows
       let reviewQueued = 0;
-      for (const row of reviewRows) {
+      const toQueue = [
+        ...plan.review.map((row) => ({ row, extraReason: '' })),
+        ...plan.deferred.map((row) => ({
+          row,
+          extraReason: `Agent "${row.agentName}" matched more than one existing sub-agent and was left for review.`,
+        })),
+      ];
+
+      for (const { row, extraReason } of toQueue) {
+        const reason = [row.errors.join('; '), extraReason].filter(Boolean).join(' ');
         const { error: queueErr } = await supabase.from('import_review_queue').insert({
           batch_id: batchId,
           full_name: row.fullName || 'UNKNOWN',
@@ -483,7 +541,7 @@ export default function ImportCsvPage() {
           expected_return_date: row.expectedReturn || null,
           visa_company: row.visaCompany || null,
           arrival_port: row.arrivalPort || null,
-          review_reason: row.errors.join('; '),
+          review_reason: reason,
           source_sheet: fileName,
           source_row: row.rowIndex,
           original_departure_value: row.scheduledOutbound,
@@ -493,46 +551,53 @@ export default function ImportCsvPage() {
         if (!queueErr) reviewQueued++;
       }
 
-      // Record batch
       await supabase.from('import_batches').insert({
         id: batchId,
         file_name: fileName,
         file_hash: fileHash,
         performed_by: profile?.id ?? null,
         performed_by_name: profile?.full_name ?? '',
-        total_rows: summary!.totalRows,
-        ready_rows: validRows.length,
-        review_rows: reviewRows.length,
+        total_rows: summary.totalRows,
+        ready_rows: plan.ready.length,
+        review_rows: toQueue.length,
         pilgrims_created: created,
         agents_created: agentsCreated,
         agents_matched: agentsMatched,
-        duplicates_skipped: duplicateRows.length,
+        duplicates_skipped: plan.duplicates.length,
         review_queued: reviewQueued,
         demo_agents_removed: 0,
         demo_pilgrims_removed: 0,
       });
 
-      // Audit log
       await logAudit({
         action: 'csv_import_completed',
         recordType: 'pilgrim',
-        recordLabel: `CSV import: ${fileName} — ${created} created, ${reviewQueued} review, ${duplicateRows.length} duplicates`,
+        recordLabel: `CSV import: ${fileName} — ${created} created, ${reviewQueued} review, ${plan.duplicates.length} duplicates`,
         newValue: {
           batch_id: batchId,
           file_name: fileName,
           file_hash: fileHash,
-          total_rows: summary!.totalRows,
+          total_rows: summary.totalRows,
           created,
           review_queued: reviewQueued,
-          duplicates: duplicateRows.length,
+          duplicates: plan.duplicates.length,
           agents_created: agentsCreated,
           agents_matched: agentsMatched,
+          agents_deferred_to_review: deferredAgentKeys.size,
         },
         performedBy: profile?.id ?? null,
         performedByName: profile?.full_name ?? '',
       });
 
-      setImportResult({ created, review: reviewQueued, duplicates: duplicateRows.length, agentsCreated, agentsMatched });
+      setImportResult({
+        created,
+        review: reviewQueued,
+        duplicates: plan.duplicates.length,
+        agentsCreated,
+        agentsMatched,
+        deferredAgents: deferredAgentKeys.size,
+        failed,
+      });
       setPhase('done');
     } catch (err) {
       setError(friendlyError(err));
@@ -540,271 +605,406 @@ export default function ImportCsvPage() {
     }
   }
 
-  // ============================================================
-  // Render
-  // ============================================================
+  const stageIndex =
+    phase === 'upload' ? 0 : phase === 'analysing' ? 1 : phase === 'preview' ? 2 : phase === 'importing' ? 3 : 4;
 
+  // ---------------------------------------------------------- result
   if (phase === 'done' && importResult) {
+    const partial = importResult.failed > 0 || importResult.review > 0 || importResult.duplicates > 0;
     return (
       <div>
-        <Link to="/app/pilgrims" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-          <ArrowLeft className="h-4 w-4" /> Back to Pilgrims
-        </Link>
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center">
-          <CheckCircle2 className="h-12 w-12 text-emerald-600 mx-auto" />
-          <h2 className="mt-4 font-display text-xl font-bold text-slate-900">Import Complete</h2>
-          <p className="mt-2 text-sm text-slate-600">File: {fileName}</p>
-          <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-2xl mx-auto">
-            <ResultStat label="Pilgrims Created" value={importResult.created} color="text-emerald-700" />
-            <ResultStat label="Review Queue" value={importResult.review} color="text-orange-600" />
-            <ResultStat label="Duplicates Skipped" value={importResult.duplicates} color="text-slate-600" />
-            <ResultStat label="New Agents" value={importResult.agentsCreated} color="text-brand-600" />
-          </div>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <Link to="/app/pilgrims/review-queue" className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600 transition-all">
-              Go to Review Queue
-            </Link>
-            <button onClick={resetAll} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all">
-              Import Another File
-            </button>
-          </div>
+        <PageHeader eyebrow="Pilgrims" title="Import CSV" subtitle={`Result for ${fileName}`} />
+        <ImportStages stages={STAGES} currentIndex={4} className="mb-6" />
+
+        <Alert
+          tone={partial ? 'warning' : 'success'}
+          title={
+            partial
+              ? 'Import finished — some rows need attention'
+              : `Import complete — ${importResult.created} pilgrims created`
+          }
+          className="mb-6"
+        >
+          {partial
+            ? 'Records that could be created were created. Everything else is listed below, with nothing silently discarded.'
+            : 'Every row in this file was imported as an active pilgrim record.'}
+        </Alert>
+
+        <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <OutcomeTile label="Pilgrims created" value={importResult.created} tone="ready" description="Now active records" />
+          <OutcomeTile
+            label="Sent to review queue"
+            value={importResult.review}
+            tone="review"
+            description="Awaiting a human decision"
+          />
+          <OutcomeTile
+            label="Duplicates skipped"
+            value={importResult.duplicates}
+            tone="blocked"
+            description="Passport already on the platform"
+          />
+          <OutcomeTile
+            label="Rejected on insert"
+            value={importResult.failed}
+            tone="blocked"
+            description="Blocked by the database"
+          />
+          <OutcomeTile label="Existing agents matched" value={importResult.agentsMatched} tone="info" />
+          <OutcomeTile label="New agents created" value={importResult.agentsCreated} tone="info" />
+          <OutcomeTile
+            label="Agents left for review"
+            value={importResult.deferredAgents}
+            tone="review"
+            description="Ambiguous, not guessed"
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {importResult.review > 0 && (
+            <ButtonLink
+              to="/app/pilgrims/review-queue"
+              icon={<ClipboardList className="h-4 w-4" aria-hidden="true" />}
+            >
+              Open Review Queue ({importResult.review})
+            </ButtonLink>
+          )}
+          <ButtonLink to="/app/pilgrims" variant="secondary">
+            View pilgrims
+          </ButtonLink>
+          <Button variant="secondary" onClick={resetAll} icon={<Upload className="h-4 w-4" aria-hidden="true" />}>
+            Import another file
+          </Button>
         </div>
       </div>
     );
   }
 
+  // ---------------------------------------------------------- workflow
   return (
     <div>
-      <Link to="/app/pilgrims" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-4">
-        <ArrowLeft className="h-4 w-4" /> Back to Pilgrims
-      </Link>
-
       <PageHeader
-        title="Import Pilgrims from CSV"
-        subtitle="Upload a CSV file to bulk-import pilgrim records. All imported records start as Travel Scheduled — no arrival or departure is confirmed."
-        icon={<Upload className="h-6 w-6" />}
+        eyebrow="Pilgrims"
+        title="Import CSV"
+        subtitle="Bulk-import pilgrim records from a CSV file. Every imported record starts as planned travel only — no arrival or departure is confirmed by an import."
         actions={
-          <button
+          <Button
+            variant="secondary"
             onClick={downloadTemplate}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+            icon={<Download className="h-4 w-4" aria-hidden="true" />}
           >
-            <Download className="h-4 w-4" /> Download Template
-          </button>
+            Download template
+          </Button>
         }
       />
 
+      <ImportStages stages={STAGES} currentIndex={stageIndex} className="mb-6" />
+
       {error && (
-        <div className="mb-6 rounded-xl bg-red-50 border border-red-200 p-4 flex items-start gap-3">
-          <AlertTriangle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
+        <Alert tone="critical" title="This file could not be used" className="mb-6" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
       )}
 
-      {/* Upload phase */}
+      {/* Stage 1 — upload */}
       {phase === 'upload' && (
-        <div
-          onDrop={onDrop}
-          onDragOver={(e) => e.preventDefault()}
-          className="rounded-2xl border-2 border-dashed border-slate-200 bg-white p-12 text-center hover:border-brand-300 hover:bg-brand-50/20 transition-all cursor-pointer"
-          onClick={() => fileRef.current?.click()}
-        >
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-50">
-            <Upload className="h-8 w-8 text-brand-500" />
+        <div className="space-y-5">
+          <div
+            onDrop={(e) => {
+              e.preventDefault();
+              const file = e.dataTransfer.files?.[0];
+              if (file) handleFile(file);
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            className="rounded-lg border-2 border-dashed border-slate-300 bg-white p-10 text-center transition-colors hover:border-brand-500 hover:bg-brand-50/30"
+          >
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-md border border-slate-300 bg-slate-50 text-slate-500">
+              <UploadCloud className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <p className="mt-4 font-display text-sm font-bold text-navy-900">
+              Drop a CSV file here, or choose one to begin
+            </p>
+            <p className="mt-1.5 text-sm text-slate-600">
+              Any row count is supported. Use the template for the expected column names.
+            </p>
+            <Button className="mt-5" onClick={() => fileRef.current?.click()}>
+              Choose CSV file
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+              }}
+              className="sr-only"
+              aria-label="Choose a CSV file to import"
+            />
           </div>
-          <p className="mt-4 font-display font-bold text-base text-slate-900">Drop your CSV file here or click to browse</p>
-          <p className="mt-1 text-sm text-slate-500">Supports any row count. Use the template for the correct column format.</p>
-          <input ref={fileRef} type="file" accept=".csv" onChange={onFileChange} className="hidden" />
+
+          <Panel title="What this import does" description="So there are no surprises before you upload.">
+            <ul className="space-y-2 text-sm leading-relaxed text-slate-700">
+              <li className="flex gap-2">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" aria-hidden="true" />
+                Valid rows become pilgrim records with planned travel dates only.
+              </li>
+              <li className="flex gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                Rows with problems, and rows whose agent is ambiguous, go to the Review Queue for a human
+                decision.
+              </li>
+              <li className="flex gap-2">
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-700" aria-hidden="true" />
+                Rows whose passport already exists are blocked and skipped.
+              </li>
+            </ul>
+          </Panel>
         </div>
       )}
 
-      {/* Preview phase */}
+      {/* Stage 2 — analysing */}
+      {phase === 'analysing' && <LoadingBlock label={`Analysing ${fileName}…`} />}
+
+      {/* Stages 3–4 — preview, resolve, confirm */}
       {(phase === 'preview' || phase === 'importing') && summary && (
         <div className="space-y-6">
           {phase === 'importing' && (
-            <div className="rounded-xl bg-brand-50 border border-brand-200 p-4 flex items-center gap-3">
-              <Loader2 className="h-5 w-5 animate-spin text-brand-500" />
-              <p className="text-sm font-semibold text-brand-800">Importing pilgrims... Please do not close this page.</p>
-            </div>
+            <Alert tone="info" title="Importing — please keep this page open">
+              Creating pilgrim records and queueing rows for review. This can take a moment for large files.
+            </Alert>
           )}
 
-          {/* File info */}
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-            <div className="flex items-center gap-3">
-              <FileText className="h-5 w-5 text-slate-400" />
-              <div className="flex-1">
-                <p className="font-semibold text-slate-900">{fileName}</p>
-                <p className="text-xs text-slate-400 font-mono">{fileHash.substring(0, 16)}...</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            <SummaryCard icon={FileText} label="Total Rows" value={summary.totalRows} color="text-slate-700" bg="bg-slate-50" />
-            <SummaryCard icon={CheckCircle2} label="Valid" value={summary.validRows} color="text-emerald-700" bg="bg-emerald-50" />
-            <SummaryCard icon={AlertTriangle} label="Review" value={summary.reviewRows} color="text-orange-600" bg="bg-orange-50" />
-            <SummaryCard icon={Copy} label="Duplicates" value={summary.duplicateRows} color="text-slate-500" bg="bg-slate-100" />
-            <SummaryCard icon={Building2} label="Agents Matched" value={summary.existingAgentsMatched} color="text-brand-600" bg="bg-brand-50" />
-            <SummaryCard icon={Sparkles} label="New Agents" value={summary.newAgents} color="text-blue-600" bg="bg-blue-50" />
-            <SummaryCard icon={AlertTriangle} label="Ambiguous" value={summary.ambiguousAgents} color="text-amber-600" bg="bg-amber-50" />
-          </div>
-
-          {/* Safety notice */}
-          <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 flex items-start gap-3">
-            <ShieldCheck className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
-            <div className="text-sm text-blue-800">
-              <p className="font-semibold">Import Safety</p>
-              <p className="mt-1">All imported pilgrims will start as <strong>Travel Scheduled</strong>. No arrival or departure will be confirmed. Planned dates are stored separately from actual confirmation data.</p>
-            </div>
-          </div>
-
-          {/* Agent matching */}
-          {agentMatches.length > 0 && (
-            <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-              <div className="p-5 border-b border-slate-100">
-                <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
-                  <Building2 className="h-5 w-5 text-slate-400" /> Agent Matching
-                </h3>
-                <p className="text-sm text-slate-500 mt-1">Review agent matches before importing. Resolve ambiguous agents by selecting the correct existing agent or choosing to create a new one.</p>
-              </div>
-              <div className="divide-y divide-slate-50">
-                {agentMatches.map((match) => (
-                  <div key={match.normalized} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${match.existingAgent ? 'bg-emerald-50' : match.isAmbiguous ? 'bg-amber-50' : 'bg-blue-50'}`}>
-                        {match.existingAgent ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                        ) : match.isAmbiguous ? (
-                          <AlertTriangle className="h-4 w-4 text-amber-600" />
-                        ) : (
-                          <Sparkles className="h-4 w-4 text-blue-600" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="font-semibold text-sm text-slate-900">{match.csvName}</p>
-                        {match.existingAgent ? (
-                          <p className="text-xs text-emerald-600">Matched: {match.existingAgent.organisation_name}</p>
-                        ) : match.isAmbiguous ? (
-                          <p className="text-xs text-amber-600">Ambiguous — {match.candidates.length} possible matches</p>
-                        ) : (
-                          <p className="text-xs text-blue-600">New agent — will be created</p>
-                        )}
-                      </div>
-                    </div>
-                    {match.isAmbiguous && (
-                      <select
-                        value={ambiguousResolutions[match.normalized] ?? ''}
-                        onChange={(e) => setAmbiguousResolutions((prev) => ({ ...prev, [match.normalized]: e.target.value }))}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
-                      >
-                        <option value="">Select action...</option>
-                        {match.candidates.map((c) => (
-                          <option key={c.id} value={c.id}>Use: {c.organisation_name}</option>
-                        ))}
-                        <option value="new">Create new agent</option>
-                      </select>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Duplicate pilgrims */}
-          {summary.duplicateRows > 0 && (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-              <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
-                <Copy className="h-5 w-5 text-slate-400" /> Duplicate Pilgrims ({summary.duplicateRows})
-              </h3>
-              <p className="text-sm text-slate-500 mt-1">These passports already exist in the database. They will be skipped.</p>
-              <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
-                {rows.filter((r) => r.status === 'duplicate').map((r) => (
-                  <div key={r.rowIndex} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm">
-                    <span className="text-slate-700">{r.fullName}</span>
-                    <span className="font-mono text-xs text-slate-500">{r.passportNumber}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Review rows */}
-          {summary.reviewRows > 0 && (
-            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-5">
-              <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-orange-500" /> Rows Requiring Review ({summary.reviewRows})
-              </h3>
-              <p className="text-sm text-slate-500 mt-1">These rows have validation errors and will be queued for manual review after import.</p>
-              <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
-                {rows.filter((r) => r.status === 'review').map((r) => (
-                  <div key={r.rowIndex} className="rounded-lg bg-white px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-700">{r.fullName || '(missing name)'}</span>
-                      <span className="text-xs text-slate-400">Row {r.rowIndex}</span>
-                    </div>
-                    <p className="text-xs text-orange-600 mt-1">{r.errors.join('; ')}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Valid rows preview */}
-          {summary.validRows > 0 && (
-            <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-              <div className="p-5 border-b border-slate-100">
-                <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-500" /> Valid Pilgrims to Import ({summary.validRows})
-                </h3>
-              </div>
-              <div className="overflow-x-auto max-h-96">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50/60 sticky top-0">
-                    <tr className="border-b border-slate-100">
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600">Name</th>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600">Passport</th>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600 hidden sm:table-cell">Agent</th>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600 hidden md:table-cell">Outbound</th>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600 hidden md:table-cell">Return</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.filter((r) => r.status === 'valid').map((r) => (
-                      <tr key={r.rowIndex} className="border-b border-slate-50 last:border-0">
-                        <td className="px-4 py-2 font-medium text-slate-900">{r.fullName}</td>
-                        <td className="px-4 py-2 font-mono text-xs text-slate-600">{r.passportNumber}</td>
-                        <td className="px-4 py-2 text-slate-600 hidden sm:table-cell">{r.agentName}</td>
-                        <td className="px-4 py-2 text-slate-600 hidden md:table-cell">{r.scheduledOutbound}</td>
-                        <td className="px-4 py-2 text-slate-600 hidden md:table-cell">{r.expectedReturn}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Final confirmation */}
-          <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <p className="font-display font-bold text-base text-slate-900">Ready to Import</p>
-                <p className="text-sm text-slate-500 mt-1">
-                  {summary.validRows} new pilgrims will be created. {summary.reviewRows} will be queued for review. {summary.duplicateRows} duplicates will be skipped.
+          <Panel
+            title="File"
+            actions={
+              phase === 'preview' ? (
+                <Button size="sm" variant="ghost" onClick={resetAll}>
+                  Choose a different file
+                </Button>
+              ) : undefined
+            }
+          >
+            <div className="flex items-start gap-3">
+              <FileText className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-slate-900">{fileName}</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  SHA-256 <Identifier value={`${fileHash.slice(0, 16)}…`} />
                 </p>
               </div>
-              <div className="flex items-center gap-3">
-                <button onClick={resetAll} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all">
-                  Cancel
-                </button>
-                <button
-                  onClick={() => setConfirmOpen(true)}
-                  disabled={phase === 'importing' || summary.validRows === 0}
-                  className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-900/20 hover:bg-brand-600 transition-all active:scale-95 disabled:opacity-50"
-                >
-                  <FileCheck className="h-4 w-4" /> Confirm Import
-                </button>
+            </div>
+          </Panel>
+
+          {/* Row outcomes */}
+          <section aria-labelledby="row-outcomes">
+            <h2
+              id="row-outcomes"
+              className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+            >
+              Row outcomes
+            </h2>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <OutcomeTile label="Total rows" value={summary.totalRows} tone="neutral" description="Found in the file" />
+              <OutcomeTile label="Valid / ready" value={plan.ready.length} tone="ready" />
+              <OutcomeTile
+                label="Review"
+                value={plan.review.length + plan.deferred.length}
+                tone="review"
+                description="Includes rows with an ambiguous agent"
+              />
+              <OutcomeTile
+                label="Duplicate / blocked"
+                value={plan.duplicates.length}
+                tone="blocked"
+                description="Passport already on the platform"
+              />
+            </div>
+          </section>
+
+          {/* Agent resolution */}
+          <section aria-labelledby="agent-outcomes">
+            <h2
+              id="agent-outcomes"
+              className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+            >
+              Agent resolution
+            </h2>
+            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <OutcomeTile
+                label="Existing agents matched"
+                value={summary.existingAgentsMatched}
+                tone="ready"
+                description="Linked to a sub-agent already on the platform"
+              />
+              <OutcomeTile
+                label="New agents"
+                value={summary.newAgents}
+                tone="info"
+                description="Will be created on import"
+              />
+              <OutcomeTile
+                label="Ambiguous agents"
+                value={summary.ambiguousAgents}
+                tone="review"
+                description="Need a human decision"
+              />
+            </div>
+
+            {agentMatches.length > 0 && (
+              <div className="divide-y divide-slate-200 rounded-lg border border-slate-300 bg-white">
+                {agentMatches.map((match) => (
+                  <AgentResolutionRow
+                    key={match.normalized}
+                    match={match}
+                    decision={ambiguousResolutions[match.normalized] ?? LEAVE_FOR_REVIEW}
+                    onDecide={(value) =>
+                      setAmbiguousResolutions((prev) => ({ ...prev, [match.normalized]: value }))
+                    }
+                    disabled={phase === 'importing'}
+                  />
+                ))}
               </div>
+            )}
+          </section>
+
+          {/* Exceptions — the mobile-safe summary of what needs attention */}
+          {(plan.review.length > 0 || plan.duplicates.length > 0) && (
+            <section aria-labelledby="exceptions">
+              <h2
+                id="exceptions"
+                className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+              >
+                Exceptions
+              </h2>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {plan.review.length > 0 && (
+                  <Panel
+                    edge="caution"
+                    title={
+                      <span className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-700" aria-hidden="true" />
+                        Rows needing review ({plan.review.length})
+                      </span>
+                    }
+                    description="These are queued for correction and approval after the import — nothing is discarded."
+                  >
+                    <ReasonSummary
+                      items={plan.review.map((row) => ({
+                        key: `${row.rowIndex}`,
+                        label: row.fullName || '(name missing)',
+                        detail: row.errors.join('; '),
+                        row: row.rowIndex,
+                      }))}
+                    />
+                  </Panel>
+                )}
+
+                {plan.duplicates.length > 0 && (
+                  <Panel
+                    edge="critical"
+                    title={
+                      <span className="flex items-center gap-2">
+                        <Copy className="h-4 w-4 text-red-700" aria-hidden="true" />
+                        Blocked duplicates ({plan.duplicates.length})
+                      </span>
+                    }
+                    description="These passports already exist on the platform and will be skipped."
+                  >
+                    <ReasonSummary
+                      items={plan.duplicates.map((row) => ({
+                        key: `${row.rowIndex}`,
+                        label: row.fullName || '(name missing)',
+                        detail: row.passportNumber,
+                        row: row.rowIndex,
+                        identifier: true,
+                      }))}
+                    />
+                  </Panel>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Ready rows — full table on large screens only */}
+          {plan.ready.length > 0 && (
+            <section aria-labelledby="ready-rows">
+              <h2
+                id="ready-rows"
+                className="mb-3 border-b border-slate-300 pb-2 font-display text-sm font-bold uppercase tracking-wide text-navy-900"
+              >
+                Ready to import ({plan.ready.length})
+              </h2>
+
+              {/* Hundreds of CSV rows are never rendered on a phone — small screens
+                  get the decision summary above and this count instead. */}
+              <p className="rounded-lg border border-slate-300 bg-white p-4 text-sm text-slate-700 lg:hidden">
+                <span className="font-semibold tabular-nums text-emerald-900">{plan.ready.length}</span> rows are
+                ready to create as pilgrim records. Open this page on a larger screen to inspect the full row
+                list before importing.
+              </p>
+
+              <div className="hidden lg:block">
+                <TableFrame caption="Rows that will be imported as pilgrim records">
+                  <THead>
+                    <tr>
+                      <TH numeric nowrap>Row</TH>
+                      <TH nowrap>Name</TH>
+                      <TH nowrap>Passport</TH>
+                      <TH nowrap>Agent</TH>
+                      <TH numeric nowrap>Outbound</TH>
+                      <TH numeric nowrap>Return</TH>
+                    </tr>
+                  </THead>
+                  <TBody>
+                    {plan.ready.slice(0, 100).map((row) => (
+                      <TR key={row.rowIndex}>
+                        <TD numeric className="text-xs text-slate-500">
+                          {row.rowIndex}
+                        </TD>
+                        <TD className="font-medium text-slate-900">{row.fullName}</TD>
+                        <TD>
+                          <Identifier value={row.passportNumber} />
+                        </TD>
+                        <TD>{row.agentName}</TD>
+                        <TD numeric>{row.scheduledOutbound}</TD>
+                        <TD numeric>{row.expectedReturn}</TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </TableFrame>
+                {plan.ready.length > 100 && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Showing the first 100 of {plan.ready.length} ready rows. All {plan.ready.length} will be
+                    imported.
+                  </p>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Confirm */}
+          <div className="sticky bottom-0 z-10 flex flex-col gap-3 rounded-lg border border-slate-300 bg-white/95 p-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm leading-relaxed text-slate-700">
+              <span className="font-bold tabular-nums text-emerald-900">{plan.ready.length}</span> created ·{' '}
+              <span className="font-bold tabular-nums text-amber-900">
+                {plan.review.length + plan.deferred.length}
+              </span>{' '}
+              to review ·{' '}
+              <span className="font-bold tabular-nums text-red-900">{plan.duplicates.length}</span> skipped
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" onClick={resetAll} disabled={phase === 'importing'}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => setConfirmOpen(true)}
+                loading={phase === 'importing'}
+                disabled={plan.ready.length === 0 && plan.review.length + plan.deferred.length === 0}
+                icon={<FileCheck className="h-4 w-4" aria-hidden="true" />}
+              >
+                Confirm import
+              </Button>
             </div>
           </div>
         </div>
@@ -812,34 +1012,162 @@ export default function ImportCsvPage() {
 
       <ConfirmDialog
         open={confirmOpen}
-        title="Confirm CSV Import"
-        message={`This will create ${summary?.validRows ?? 0} pilgrim records, queue ${summary?.reviewRows ?? 0} for review, and skip ${summary?.duplicateRows ?? 0} duplicates. All imported pilgrims will start as Travel Scheduled. This action is recorded in the audit log.`}
-        confirmLabel="Confirm and Import"
-        onConfirm={handleConfirmImport}
-        onCancel={() => setConfirmOpen(false)}
+        title="Confirm CSV import"
+        confirmLabel={`Import ${plan.ready.length} ${plan.ready.length === 1 ? 'Pilgrim' : 'Pilgrims'}`}
         loading={phase === 'importing'}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={handleConfirmImport}
+        message={
+          <>
+            This will create <strong className="tabular-nums">{plan.ready.length}</strong> pilgrim records, queue{' '}
+            <strong className="tabular-nums">{plan.review.length + plan.deferred.length}</strong> rows for review
+            and skip <strong className="tabular-nums">{plan.duplicates.length}</strong> duplicates. Every
+            imported pilgrim starts as planned travel only — no arrival or departure is confirmed. The action is
+            recorded in the audit history.
+          </>
+        }
       />
     </div>
   );
 }
 
-function SummaryCard({ icon: Icon, label, value, color, bg }: { icon: React.ElementType; label: string; value: number; color: string; bg: string }) {
+/** Compact, scrollable exception list — safe on any screen size. */
+function ReasonSummary({
+  items,
+}: {
+  items: Array<{ key: string; label: string; detail: string; row: number; identifier?: boolean }>;
+}) {
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
-      <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${bg}`}>
-        <Icon className={`h-4 w-4 ${color}`} />
-      </div>
-      <p className="mt-2 text-2xl font-display font-extrabold text-slate-900 tabular-nums">{value}</p>
-      <p className="text-xs text-slate-500">{label}</p>
-    </div>
+    <ul className="max-h-56 space-y-2 overflow-y-auto scrollbar-thin">
+      {items.map((item) => (
+        <li key={item.key} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="min-w-0 truncate text-sm font-medium text-slate-900">{item.label}</span>
+            <span className="shrink-0 text-2xs tabular-nums text-slate-500">Row {item.row}</span>
+          </div>
+          {item.detail && (
+            <p className={cn('mt-0.5 text-xs text-slate-600', item.identifier && 'identifier')}>{item.detail}</p>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function ResultStat({ label, value, color }: { label: string; value: number; color: string }) {
+/**
+ * One CSV agent name and its resolution state.
+ *
+ * Three explicit states: Matched, New, Ambiguous. An ambiguous agent shows its
+ * candidates and defaults to leaving the decision for the Review Queue.
+ */
+function AgentResolutionRow({
+  match,
+  decision,
+  onDecide,
+  disabled,
+}: {
+  match: AgentMatch;
+  decision: string;
+  onDecide: (value: string) => void;
+  disabled: boolean;
+}) {
+  const state = match.existingAgent ? 'matched' : match.isAmbiguous ? 'ambiguous' : 'new';
+
   return (
-    <div className="rounded-xl bg-white border border-slate-100 p-4">
-      <p className={`text-2xl font-display font-extrabold ${color} tabular-nums`}>{value}</p>
-      <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+    <div className="p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold text-slate-900">{match.csvName}</p>
+            <span className="text-xs tabular-nums text-slate-500">
+              {match.pilgrimCount} {match.pilgrimCount === 1 ? 'row' : 'rows'}
+            </span>
+          </div>
+
+          {state === 'matched' && (
+            <p className="mt-1 text-sm text-slate-600">
+              Matched to{' '}
+              <Link
+                to={`/app/sub-agents/${match.existingAgent?.id}`}
+                className="font-medium text-brand-700 hover:underline"
+              >
+                {match.existingAgent?.organisation_name}
+              </Link>
+              {match.existingAgent?.country ? ` · ${match.existingAgent.country}` : ''}
+              {match.existingAgent && !match.existingAgent.active_status ? ' · currently inactive' : ''}
+            </p>
+          )}
+
+          {state === 'new' && (
+            <p className="mt-1 text-sm text-slate-600">
+              No existing sub-agent matches this name. It will be created as an active sub-agent, with the
+              contact person left as “To be updated” for an Administrator to complete.
+            </p>
+          )}
+
+          {state === 'ambiguous' && (
+            <div className="mt-1">
+              <p className="text-sm text-slate-600">
+                This name partially matches more than one existing sub-agent. Choosing between them is a
+                judgement call, so it is not made automatically.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {match.candidates.map((candidate) => (
+                  <li key={candidate.id} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <Building2 className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
+                    <Link
+                      to={`/app/sub-agents/${candidate.id}`}
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      {candidate.organisation_name}
+                    </Link>
+                    <span>· {candidate.country || 'No country recorded'}</span>
+                    <span>· {candidate.active_status ? 'Active' : 'Inactive'}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+          {state === 'matched' && (
+            <Badge tone="positive" treatment="solid">
+              Matched
+            </Badge>
+          )}
+          {state === 'new' && <Badge tone="info">New</Badge>}
+          {state === 'ambiguous' && (
+            <>
+              <Badge tone="caution">Ambiguous</Badge>
+              <label className="sr-only" htmlFor={`agent-decision-${match.normalized}`}>
+                Decision for agent {match.csvName}
+              </label>
+              <Select
+                id={`agent-decision-${match.normalized}`}
+                value={decision}
+                onChange={(e) => onDecide(e.target.value)}
+                disabled={disabled}
+                className="w-full sm:w-72"
+              >
+                <option value={LEAVE_FOR_REVIEW}>Leave for Review Queue (recommended)</option>
+                {match.candidates.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    Use existing: {candidate.organisation_name}
+                  </option>
+                ))}
+                <option value={CREATE_NEW}>Create a new sub-agent: {match.csvName}</option>
+              </Select>
+              {decision === LEAVE_FOR_REVIEW && (
+                <p className="flex items-center gap-1 text-2xs text-slate-500 sm:justify-end">
+                  <ArrowRight className="h-3 w-3" aria-hidden="true" />
+                  {match.pilgrimCount} {match.pilgrimCount === 1 ? 'row goes' : 'rows go'} to the Review Queue
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

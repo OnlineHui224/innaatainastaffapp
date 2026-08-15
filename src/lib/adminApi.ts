@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { friendlyError } from './validation';
 
 type AdminApiResult = {
   success: boolean;
@@ -288,9 +289,10 @@ export async function changeStaffRole(params: {
   });
 
   if (error) {
+    console.error('Staff management request failed:', error);
     return {
       success: false,
-      error: error.message,
+      error: friendlyError(error),
     };
   }
 
@@ -312,9 +314,10 @@ export async function suspendStaffAccount(params: {
   });
 
   if (error) {
+    console.error('Staff management request failed:', error);
     return {
       success: false,
-      error: error.message,
+      error: friendlyError(error),
     };
   }
 
@@ -334,9 +337,10 @@ export async function activateStaffAccount(params: {
   });
 
   if (error) {
+    console.error('Staff management request failed:', error);
     return {
       success: false,
-      error: error.message,
+      error: friendlyError(error),
     };
   }
 
@@ -361,9 +365,10 @@ export async function transferPlatformOwnership(params: {
   );
 
   if (error) {
+    console.error('Staff management request failed:', error);
     return {
       success: false,
-      error: error.message,
+      error: friendlyError(error),
     };
   }
 
@@ -386,9 +391,10 @@ export async function requirePasswordChange(params: {
   );
 
   if (error) {
+    console.error('Staff management request failed:', error);
     return {
       success: false,
-      error: error.message,
+      error: friendlyError(error),
     };
   }
 

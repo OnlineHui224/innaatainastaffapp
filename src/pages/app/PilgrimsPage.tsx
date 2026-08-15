@@ -1,64 +1,83 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
-  Users,
-  Plus,
-  Search,
-  Pencil,
-  Eye,
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  Filter,
-  X,
-  Upload,
   ClipboardList,
+  Eye,
+  Filter,
+  Pencil,
   PlaneLanding,
   PlaneTakeoff,
-  Clock,
+  Plus,
+  SlidersHorizontal,
+  Upload,
+  Users,
+  X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { usePilgrims, type PilgrimWithAgent } from '@/hooks/usePilgrims';
-import { calculateJourneyStatus, STATUS_META, todayStr } from '@/lib/status';
+import { STATUS_META, calculateJourneyStatus, type JourneyStatus } from '@/lib/status';
+import { formatDate, priorityReason } from '@/lib/priority';
 import { logAudit } from '@/lib/audit';
 import { friendlyError } from '@/lib/validation';
 import type { SubAgent } from '@/types';
 import { PageHeader } from '@/components/PageHeader';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { Alert } from '@/components/ui/Alert';
+import { StatusBadge } from '@/components/ui/Badge';
+import { Button, ButtonLink } from '@/components/ui/Button';
+import { EmptyState, ReadOnlyNotice, TableSkeleton } from '@/components/ui/Feedback';
+import { Identifier, SearchInput, Select } from '@/components/ui/Field';
+import { Pagination, RecordCard, TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
+import { BulkConfirmDialog, type BulkTarget } from '@/components/pilgrims/BulkConfirmDialog';
+import type { MovementFormValues, MovementKind } from '@/components/pilgrims/MovementConfirmation';
+import { cn } from '@/lib/utils';
 
-const STATUS_FILTERS = [
-  { value: 'all', label: 'All Statuses' },
-  { value: 'travel_scheduled', label: 'Travel Scheduled' },
-  { value: 'unverified', label: 'Unverified' },
-  { value: 'in_saudi_arabia', label: 'In Saudi Arabia' },
-  { value: 'departing_soon', label: 'Departing Soon' },
-  { value: 'departure_overdue', label: 'Departure Overdue' },
-  { value: 'departure_confirmed', label: 'Departure Confirmed' },
+const STATUS_FILTERS: Array<{ value: string; label: string }> = [
+  { value: 'all', label: 'All statuses' },
+  ...(Object.keys(STATUS_META) as JourneyStatus[]).map((status) => ({
+    value: status,
+    label: STATUS_META[status].label,
+  })),
 ];
 
-const PAGE_SIZE = 12;
+/** Designed for hundreds today and thousands later. */
+const PAGE_SIZE = 25;
 
 export default function PilgrimsPage() {
-  const { profile } = useAuth();
+  const { profile, canEditPilgrims } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [subAgentFilter, setSubAgentFilter] = useState('all');
-  const [nationalityFilter, setNationalityFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [subAgents, setSubAgents] = useState<SubAgent[]>([]);
   const [nationalities, setNationalities] = useState<string[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkModal, setBulkModal] = useState<'arrival' | 'departure' | null>(null);
-  const [bulkDate, setBulkDate] = useState(todayStr());
-  const [bulkTime, setBulkTime] = useState('');
-  const [bulkFlight, setBulkFlight] = useState('');
-  const [bulkPort, setBulkPort] = useState('');
+  const [bulkKind, setBulkKind] = useState<MovementKind | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const { pilgrims, allPilgrims, loading, error, total } = usePilgrims({
+  /* Filters live in the URL so dashboard and sub-agent tiles can link straight
+     into a filtered view, and staff can share or bookmark one. */
+  const statusFilter = searchParams.get('status') ?? 'all';
+  const subAgentFilter = searchParams.get('subAgent') ?? 'all';
+  const nationalityFilter = searchParams.get('nationality') ?? 'all';
+
+  function setFilter(key: string, value: string) {
+    const next = new URLSearchParams(searchParams);
+    if (value === 'all') next.delete(key);
+    else next.set(key, value);
+    setSearchParams(next, { replace: true });
+  }
+
+  function clearFilters() {
+    setSearch('');
+    setSearchParams(new URLSearchParams(), { replace: true });
+  }
+
+  const { pilgrims, allPilgrims, loading, error, total, refetch } = usePilgrims({
     search: debouncedSearch,
     statusFilter,
     subAgentFilter,
@@ -68,23 +87,32 @@ export default function PilgrimsPage() {
   });
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
   }, [search]);
 
   useEffect(() => {
-    supabase.from('sub_agents').select('*').order('organisation_name').then(({ data }) => {
-      if (data) setSubAgents(data as SubAgent[]);
-    });
+    supabase
+      .from('sub_agents')
+      .select('*')
+      .order('organisation_name')
+      .then(({ data }) => {
+        if (data) setSubAgents(data as SubAgent[]);
+      });
   }, []);
 
   useEffect(() => {
-    supabase.from('pilgrims').select('nationality').then(({ data }) => {
-      if (data) {
-        const unique = Array.from(new Set((data as { nationality: string }[]).map((d) => d.nationality))).sort();
-        setNationalities(unique);
-      }
-    });
+    supabase
+      .from('pilgrims')
+      .select('nationality')
+      .then(({ data }) => {
+        if (data) {
+          const unique = Array.from(
+            new Set((data as { nationality: string }[]).map((d) => d.nationality).filter(Boolean)),
+          ).sort();
+          setNationalities(unique);
+        }
+      });
   }, [allPilgrims.length]);
 
   useEffect(() => {
@@ -92,33 +120,44 @@ export default function PilgrimsPage() {
   }, [debouncedSearch, statusFilter, subAgentFilter, nationalityFilter]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters = search || statusFilter !== 'all' || subAgentFilter !== 'all' || nationalityFilter !== 'all';
+  const activeFilterCount =
+    (statusFilter !== 'all' ? 1 : 0) +
+    (subAgentFilter !== 'all' ? 1 : 0) +
+    (nationalityFilter !== 'all' ? 1 : 0);
+  const hasFilters = activeFilterCount > 0 || Boolean(search);
 
-  function clearFilters() {
-    setSearch('');
-    setStatusFilter('all');
-    setSubAgentFilter('all');
-    setNationalityFilter('all');
-  }
+  const sortedPilgrims = useMemo(
+    () =>
+      [...pilgrims].sort((a, b) => {
+        const pa = STATUS_META[calculateJourneyStatus(a)].priority;
+        const pb = STATUS_META[calculateJourneyStatus(b)].priority;
+        if (pa !== pb) return pa - pb;
+        return a.full_name.localeCompare(b.full_name);
+      }),
+    [pilgrims],
+  );
 
-  const sortedPilgrims = useMemo(() => {
-    return [...pilgrims].sort((a, b) => {
-      const sa = STATUS_META[calculateJourneyStatus(a)].priority;
-      const sb = STATUS_META[calculateJourneyStatus(b)].priority;
-      if (sa !== sb) return sa - sb;
-      return a.full_name.localeCompare(b.full_name);
-    });
-  }, [pilgrims]);
+  const selectableIds = useMemo(() => sortedPilgrims.map((p) => p.id), [sortedPilgrims]);
+  const allOnPageSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
 
-  const allOnPageSelected = sortedPilgrims.length > 0 && sortedPilgrims.every((p) => selectedIds.has(p.id));
+  const bulkTargets: BulkTarget[] = useMemo(
+    () =>
+      allPilgrims
+        .filter((p) => selectedIds.has(p.id))
+        .map((p) => ({
+          id: p.id,
+          full_name: p.full_name,
+          passport_number: p.passport_number,
+          agentName: p.sub_agents?.organisation_name ?? null,
+        })),
+    [allPilgrims, selectedIds],
+  );
 
   function toggleSelectAll() {
     const next = new Set(selectedIds);
-    if (allOnPageSelected) {
-      sortedPilgrims.forEach((p) => next.delete(p.id));
-    } else {
-      sortedPilgrims.forEach((p) => next.add(p.id));
-    }
+    if (allOnPageSelected) selectableIds.forEach((id) => next.delete(id));
+    else selectableIds.forEach((id) => next.add(id));
     setSelectedIds(next);
   }
 
@@ -129,34 +168,37 @@ export default function PilgrimsPage() {
     setSelectedIds(next);
   }
 
-
-
-  async function handleBulkConfirm() {
-    if (!bulkModal || selectedIds.size === 0) return;
-    if (!bulkDate || !bulkTime) {
+  /**
+   * Bulk confirmation. The written columns and audit behaviour are unchanged from
+   * the existing implementation — only the surrounding safeguards were redesigned.
+   */
+  async function handleBulkConfirm(values: MovementFormValues) {
+    if (!bulkKind || selectedIds.size === 0) return;
+    if (!values.date || !values.time) {
       setBulkError('Both date and time are required.');
       return;
     }
     setBulkLoading(true);
     setBulkError(null);
-    const eventTimestamp = `${bulkDate}T${bulkTime}:00`;
+
+    const eventTimestamp = `${values.date}T${values.time}:00`;
     const updates: Record<string, unknown> =
-      bulkModal === 'arrival'
+      bulkKind === 'arrival'
         ? {
-            actual_arrival_at: bulkDate,
-            arrival_date: bulkDate,
+            actual_arrival_at: values.date,
+            arrival_date: values.date,
             arrival_confirmed_at: eventTimestamp,
             arrival_confirmed_by: profile?.id ?? null,
-            arrival_port_actual: bulkPort || null,
-            arrival_flight_number: bulkFlight || null,
+            arrival_port_actual: values.port || null,
+            arrival_flight_number: values.flight || null,
             status_source: 'MANUAL_CONFIRMATION',
           }
         : {
-            actual_departure_date: bulkDate,
+            actual_departure_date: values.date,
             departure_confirmed_at: eventTimestamp,
             departure_confirmed_by: profile?.id ?? null,
-            departure_airport: bulkPort || null,
-            departure_flight_number: bulkFlight || null,
+            departure_airport: values.port || null,
+            departure_flight_number: values.flight || null,
             status_source: 'MANUAL_CONFIRMATION',
           };
 
@@ -172,353 +214,467 @@ export default function PilgrimsPage() {
       return;
     }
 
-    const action = bulkModal === 'arrival' ? 'bulk_arrival_confirmed' : 'bulk_departure_confirmed';
-    const label = bulkModal === 'arrival' ? 'Bulk arrival confirmed' : 'Bulk departure confirmed';
+    const action = bulkKind === 'arrival' ? 'bulk_arrival_confirmed' : 'bulk_departure_confirmed';
+    const label = bulkKind === 'arrival' ? 'Bulk arrival confirmed' : 'Bulk departure confirmed';
     for (const id of ids) {
-      const p = sortedPilgrims.find((sp) => sp.id === id);
+      const target = bulkTargets.find((t) => t.id === id);
       await logAudit({
         action,
         recordType: 'pilgrim',
         recordId: id,
-        recordLabel: `${label}: ${p?.full_name ?? id}`,
-        newValue: { date: bulkDate, time: bulkTime, flight: bulkFlight, port: bulkPort, count: ids.length },
+        recordLabel: `${label}: ${target?.full_name ?? id}`,
+        newValue: {
+          date: values.date,
+          time: values.time,
+          flight: values.flight,
+          port: values.port,
+          count: ids.length,
+        },
         performedBy: profile?.id ?? null,
         performedByName: profile?.full_name ?? '',
       });
     }
 
     setBulkLoading(false);
-    setBulkModal(null);
+    setBulkResult(
+      `${ids.length} ${ids.length === 1 ? 'pilgrim' : 'pilgrims'} confirmed as ${
+        bulkKind === 'arrival' ? 'arrived' : 'departed'
+      } on ${formatDate(values.date)} at ${values.time}.`,
+    );
+    setBulkKind(null);
     setSelectedIds(new Set());
-    setBulkDate(todayStr());
-    setBulkTime('');
-    setBulkFlight('');
-    setBulkPort('');
+    refetch();
   }
+
+  const filterControls = (
+    <>
+      <label className="sr-only" htmlFor="filter-status">
+        Filter by journey status
+      </label>
+      <Select
+        id="filter-status"
+        value={statusFilter}
+        onChange={(e) => setFilter('status', e.target.value)}
+        className="w-full sm:w-auto"
+      >
+        {STATUS_FILTERS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+
+      <label className="sr-only" htmlFor="filter-sub-agent">
+        Filter by sub-agent
+      </label>
+      <Select
+        id="filter-sub-agent"
+        value={subAgentFilter}
+        onChange={(e) => setFilter('subAgent', e.target.value)}
+        className="w-full sm:w-auto"
+      >
+        <option value="all">All sub-agents</option>
+        <option value="unassigned">Unassigned</option>
+        {subAgents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.organisation_name}
+          </option>
+        ))}
+      </Select>
+
+      <label className="sr-only" htmlFor="filter-nationality">
+        Filter by nationality
+      </label>
+      <Select
+        id="filter-nationality"
+        value={nationalityFilter}
+        onChange={(e) => setFilter('nationality', e.target.value)}
+        className="w-full sm:w-auto"
+      >
+        <option value="all">All nationalities</option>
+        {nationalities.map((nationality) => (
+          <option key={nationality} value={nationality}>
+            {nationality}
+          </option>
+        ))}
+      </Select>
+
+      {hasFilters && (
+        <Button
+          variant="ghost"
+          onClick={clearFilters}
+          icon={<X className="h-4 w-4" aria-hidden="true" />}
+          className="w-full sm:w-auto"
+        >
+          Clear
+        </Button>
+      )}
+    </>
+  );
 
   return (
     <div>
       <PageHeader
+        eyebrow="Operations"
         title="Pilgrims"
-        subtitle={`${total} record${total !== 1 ? 's' : ''}`}
-        icon={<Users className="h-6 w-6" />}
+        subtitle={
+          <>
+            {total.toLocaleString()} {total === 1 ? 'record' : 'records'} match the current view.
+            {!canEditPilgrims && ' Your role has read access to this directory.'}
+          </>
+        }
         actions={
-          <div className="flex items-center gap-2">
-            <Link
-              to="/app/pilgrims/review-queue"
-              className="inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-700 hover:bg-orange-100 transition-all"
-            >
-              <ClipboardList className="h-4 w-4" /> Review Queue
-            </Link>
-            <Link
-              to="/app/pilgrims/import-csv"
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
-            >
-              <Upload className="h-4 w-4" /> Import CSV
-            </Link>
-            <Link
-              to="/app/pilgrims/new"
-              className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-900/20 hover:bg-brand-600 transition-all active:scale-95"
-            >
-              <Plus className="h-4 w-4" />
-              Add Pilgrim
-            </Link>
-          </div>
+          canEditPilgrims ? (
+            <>
+              <ButtonLink
+                to="/app/pilgrims/review-queue"
+                variant="secondary"
+                icon={<ClipboardList className="h-4 w-4" aria-hidden="true" />}
+              >
+                Review Queue
+              </ButtonLink>
+              <ButtonLink
+                to="/app/pilgrims/import-csv"
+                variant="secondary"
+                icon={<Upload className="h-4 w-4" aria-hidden="true" />}
+              >
+                Import CSV
+              </ButtonLink>
+              <ButtonLink to="/app/pilgrims/new" icon={<Plus className="h-4 w-4" aria-hidden="true" />}>
+                Add Pilgrim
+              </ButtonLink>
+            </>
+          ) : undefined
         }
       />
 
-      {/* Bulk action bar */}
-      {selectedIds.size > 0 && (
-        <div className="mb-4 rounded-2xl border border-brand-200 bg-brand-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
-          <p className="text-sm font-semibold text-brand-800">
-            {selectedIds.size} pilgrim{selectedIds.size !== 1 ? 's' : ''} selected
+      {!canEditPilgrims && (
+        <ReadOnlyNotice className="mb-5">
+          You have Viewer access. Pilgrim records are read-only for your role — you can search, filter and open
+          any record, but creating, editing, importing and confirming movement are not available. Contact an
+          Administrator if you need operational access.
+        </ReadOnlyNotice>
+      )}
+
+      {bulkResult && (
+        <Alert tone="success" className="mb-4" onDismiss={() => setBulkResult(null)}>
+          {bulkResult}
+        </Alert>
+      )}
+
+      {/* Filters — a bar on desktop, a disclosure sheet on small screens */}
+      <div className="mb-4 rounded-lg border border-slate-300 bg-white">
+        <div className="flex flex-col gap-2.5 p-2.5 lg:flex-row lg:items-center">
+          <SearchInput
+            label="Search pilgrims"
+            value={search}
+            onValueChange={setSearch}
+            placeholder="Search by name, passport, nationality or phone…"
+            className="flex-1"
+          />
+          <div className="hidden flex-wrap items-center gap-2 lg:flex">{filterControls}</div>
+          <Button
+            variant="secondary"
+            className="lg:hidden"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            aria-controls="pilgrim-filter-sheet"
+            icon={<SlidersHorizontal className="h-4 w-4" aria-hidden="true" />}
+          >
+            Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+          </Button>
+        </div>
+        {filtersOpen && (
+          <div
+            id="pilgrim-filter-sheet"
+            className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 p-3 lg:hidden"
+          >
+            {filterControls}
+          </div>
+        )}
+      </div>
+
+      {/* Bulk action bar — only for roles that may write */}
+      {canEditPilgrims && selectedIds.size > 0 && (
+        <div className="mb-4 flex flex-col gap-3 rounded-lg border border-brand-400 bg-brand-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-semibold text-brand-900">
+            <span className="tabular-nums">{selectedIds.size}</span>{' '}
+            {selectedIds.size === 1 ? 'pilgrim' : 'pilgrims'} selected
           </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { setBulkModal('arrival'); setBulkError(null); }}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-all"
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="confirm"
+              onClick={() => {
+                setBulkError(null);
+                setBulkKind('arrival');
+              }}
+              icon={<PlaneLanding className="h-4 w-4" aria-hidden="true" />}
             >
-              <PlaneLanding className="h-4 w-4" /> Bulk Confirm Arrival
-            </button>
-            <button
-              onClick={() => { setBulkModal('departure'); setBulkError(null); }}
-              className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-all"
+              Confirm arrival
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setBulkError(null);
+                setBulkKind('departure');
+              }}
+              icon={<PlaneTakeoff className="h-4 w-4" aria-hidden="true" />}
             >
-              <PlaneTakeoff className="h-4 w-4" /> Bulk Confirm Departure
-            </button>
-            <button
+              Confirm departure
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
               onClick={() => setSelectedIds(new Set())}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-all"
+              icon={<X className="h-4 w-4" aria-hidden="true" />}
             >
-              <X className="h-4 w-4" /> Clear
-            </button>
+              Clear selection
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Filters */}
-      <div className="mb-6 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-        <div className="flex flex-col lg:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name, passport, nationality, or phone..."
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
-            >
-              {STATUS_FILTERS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-            <select
-              value={subAgentFilter}
-              onChange={(e) => setSubAgentFilter(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
-            >
-              <option value="all">All Sub-Agents</option>
-              <option value="unassigned">Unassigned</option>
-              {subAgents.map((sa) => (
-                <option key={sa.id} value={sa.id}>{sa.organisation_name}</option>
-              ))}
-            </select>
-            <select
-              value={nationalityFilter}
-              onChange={(e) => setNationalityFilter(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none"
-            >
-              <option value="all">All Nationalities</option>
-              {nationalities.map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-            {hasFilters && (
-              <button
-                onClick={clearFilters}
-                className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-all"
-              >
-                <X className="h-4 w-4" /> Clear
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Table */}
       {loading ? (
-        <div className="rounded-2xl border border-slate-100 bg-white p-12 text-center">
-          <Loader2 className="h-6 w-6 animate-spin mx-auto text-slate-400" />
-          <p className="mt-3 text-sm text-slate-500">Loading pilgrims...</p>
-        </div>
+        <TableSkeleton rows={8} columns={7} />
       ) : error ? (
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
+        <Alert tone="critical" title="The pilgrim directory could not be loaded">
           {error}
-        </div>
+        </Alert>
       ) : sortedPilgrims.length === 0 ? (
-        <div className="rounded-2xl border border-slate-100 bg-white p-12 text-center">
-          {hasFilters ? (
-            <>
-              <Filter className="h-10 w-10 text-slate-300 mx-auto" />
-              <p className="mt-3 text-sm text-slate-500">No pilgrims match your filters.</p>
-              <button onClick={clearFilters} className="mt-3 text-sm font-semibold text-brand-600 hover:text-brand-700">
+        hasFilters ? (
+          <EmptyState
+            icon={<Filter className="h-5 w-5" aria-hidden="true" />}
+            title="No pilgrims match these filters"
+            description="Adjust or clear the filters to widen the search."
+            action={
+              <Button variant="secondary" onClick={clearFilters}>
                 Clear filters
-              </button>
-            </>
-          ) : (
-            <>
-              <Users className="h-10 w-10 text-slate-300 mx-auto" />
-              <p className="mt-3 text-sm text-slate-500">No pilgrims yet.</p>
-              <Link to="/app/pilgrims/new" className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-all">
-                <Plus className="h-4 w-4" /> Add Pilgrim
-              </Link>
-            </>
-          )}
-        </div>
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState
+            icon={<Users className="h-5 w-5" aria-hidden="true" />}
+            title="No pilgrim records yet"
+            description={
+              canEditPilgrims
+                ? 'Add a pilgrim manually, or import a CSV batch to populate the directory.'
+                : 'No pilgrim records have been registered on the platform yet.'
+            }
+            action={
+              canEditPilgrims ? (
+                <>
+                  <ButtonLink to="/app/pilgrims/new" icon={<Plus className="h-4 w-4" aria-hidden="true" />}>
+                    Add Pilgrim
+                  </ButtonLink>
+                  <ButtonLink to="/app/pilgrims/import-csv" variant="secondary">
+                    Import CSV
+                  </ButtonLink>
+                </>
+              ) : undefined
+            }
+          />
+        )
       ) : (
         <>
-          <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50/60">
-                    <th className="px-4 py-3 w-10">
+          {/* Desktop / laptop table */}
+          <div className="hidden md:block">
+            <TableFrame caption="Pilgrim directory">
+              <THead>
+                <tr>
+                  {canEditPilgrims && (
+                    <TH className="w-10">
                       <input
                         type="checkbox"
                         checked={allOnPageSelected}
                         onChange={toggleSelectAll}
-                        className="rounded border-slate-300 text-brand-500 focus:ring-brand-200"
+                        aria-label={
+                          allOnPageSelected ? 'Deselect all rows on this page' : 'Select all rows on this page'
+                        }
+                        className="h-4 w-4 rounded border-slate-400"
                       />
-                    </th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600">Name</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600">Nationality</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 hidden md:table-cell">Passport</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 hidden lg:table-cell">Scheduled</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600">Status</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 hidden sm:table-cell">Sub-Agent</th>
-                    <th className="px-4 py-3 text-right font-semibold text-slate-600">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedPilgrims.map((p) => {
-                    const status = calculateJourneyStatus(p);
-                    const meta = STATUS_META[status];
-                    return (
-                      <tr key={p.id} className={`border-b border-slate-50 last:border-0 hover:bg-slate-50/40 transition-colors ${selectedIds.has(p.id) ? 'bg-brand-50/30' : ''}`}>
-                        <td className="px-4 py-3">
+                    </TH>
+                  )}
+                  <TH nowrap>Name</TH>
+                  <TH className="hidden xl:table-cell" nowrap>Nationality</TH>
+                  <TH className="hidden lg:table-cell" nowrap>Passport</TH>
+                  <TH numeric nowrap>Sched. out</TH>
+                  <TH numeric nowrap>Sched. return</TH>
+                  <TH nowrap>Status</TH>
+                  <TH className="hidden xl:table-cell" nowrap>Sub-agent</TH>
+                  <TH align="right" nowrap>Actions</TH>
+                </tr>
+              </THead>
+              <TBody>
+                {sortedPilgrims.map((p) => {
+                  const status = calculateJourneyStatus(p);
+                  const isSelected = selectedIds.has(p.id);
+                  return (
+                    <TR key={p.id} selected={isSelected}>
+                      {canEditPilgrims && (
+                        <TD>
                           <input
                             type="checkbox"
-                            checked={selectedIds.has(p.id)}
+                            checked={isSelected}
                             onChange={() => toggleSelect(p.id)}
-                            className="rounded border-slate-300 text-brand-500 focus:ring-brand-200"
+                            aria-label={`Select ${p.full_name}`}
+                            className="h-4 w-4 rounded border-slate-400"
                           />
-                        </td>
-                        <td className="px-4 py-3 font-semibold text-slate-900">{p.full_name}</td>
-                        <td className="px-4 py-3 text-slate-600">{p.nationality}</td>
-                        <td className="px-4 py-3 text-slate-600 hidden md:table-cell font-mono text-xs">{p.passport_number}</td>
-                        <td className="px-4 py-3 text-slate-600 hidden lg:table-cell">{p.expected_departure_date}</td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${meta.bgColor} ${meta.color} border ${meta.borderColor}`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${meta.dotColor}`} />
-                            {meta.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600 hidden sm:table-cell">
-                          {p.sub_agents?.organisation_name || <span className="text-slate-400">Unassigned</span>}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center justify-end gap-1">
-                            <Link to={`/app/pilgrims/${p.id}`} className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-all" title="View">
-                              <Eye className="h-4 w-4" />
+                        </TD>
+                      )}
+                      <TD>
+                        <Link
+                          to={`/app/pilgrims/${p.id}`}
+                          className="font-semibold text-slate-900 hover:text-brand-700 hover:underline"
+                        >
+                          {p.full_name}
+                        </Link>
+                        <span className="mt-0.5 block text-xs text-slate-500 xl:hidden">{p.nationality}</span>
+                      </TD>
+                      <TD className="hidden xl:table-cell">{p.nationality}</TD>
+                      <TD className="hidden lg:table-cell">
+                        <Identifier value={p.passport_number} />
+                      </TD>
+                      <TD numeric className="whitespace-nowrap">
+                        {formatDate(p.expected_departure_date, 'Not set')}
+                      </TD>
+                      <TD numeric className="whitespace-nowrap">
+                        {formatDate(p.expected_return_date, 'Not set')}
+                      </TD>
+                      <TD>
+                        <StatusBadge status={status} record={p} />
+                      </TD>
+                      <TD className="hidden xl:table-cell">
+                        {p.sub_agents ? (
+                          <Link
+                            to={`/app/sub-agents/${p.sub_agents.id}`}
+                            className="text-brand-700 hover:underline"
+                          >
+                            {p.sub_agents.organisation_name}
+                          </Link>
+                        ) : (
+                          <span className="text-slate-500">Unassigned</span>
+                        )}
+                      </TD>
+                      <TD align="right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Link
+                            to={`/app/pilgrims/${p.id}`}
+                            aria-label={`View ${p.full_name}`}
+                            title="View record"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-brand-700"
+                          >
+                            <Eye className="h-4 w-4" aria-hidden="true" />
+                          </Link>
+                          {canEditPilgrims && (
+                            <Link
+                              to={`/app/pilgrims/${p.id}/edit`}
+                              aria-label={`Edit ${p.full_name}`}
+                              title="Edit record"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-brand-700"
+                            >
+                              <Pencil className="h-4 w-4" aria-hidden="true" />
                             </Link>
-                            <Link to={`/app/pilgrims/${p.id}/edit`} className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-all" title="Edit">
-                              <Pencil className="h-4 w-4" />
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          )}
+                        </div>
+                      </TD>
+                    </TR>
+                  );
+                })}
+              </TBody>
+            </TableFrame>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="mt-6 flex items-center justify-between">
-              <p className="text-sm text-slate-500">
-                Page {page} of {totalPages} ({total} total)
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all disabled:opacity-40"
+          {/* Mobile record cards */}
+          <div className="space-y-3 md:hidden">
+            {sortedPilgrims.map((p) => {
+              const status = calculateJourneyStatus(p);
+              const reason = priorityReason(p, status);
+              const isSelected = selectedIds.has(p.id);
+              return (
+                <RecordCard
+                  key={p.id}
+                  className={cn(isSelected && 'border-brand-500 bg-brand-50/40')}
+                  accent={
+                    status === 'departure_overdue'
+                      ? 'critical'
+                      : status === 'departing_soon'
+                        ? 'caution'
+                        : 'none'
+                  }
                 >
-                  <ChevronLeft className="h-4 w-4" /> Prev
-                </button>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all disabled:opacity-40"
-                >
-                  Next <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          )}
+                  <div className="flex items-start gap-3">
+                    {canEditPilgrims && (
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(p.id)}
+                        aria-label={`Select ${p.full_name}`}
+                        className="mt-1 h-4 w-4 shrink-0 rounded border-slate-400"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        to={`/app/pilgrims/${p.id}`}
+                        className="font-semibold text-slate-900 hover:text-brand-700 hover:underline"
+                      >
+                        {p.full_name}
+                      </Link>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        {p.nationality} · <Identifier value={p.passport_number} />
+                      </p>
+                      <div className="mt-2">
+                        <StatusBadge status={status} record={p} />
+                      </div>
+                      <dl className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-200 pt-2.5 text-xs">
+                        <div>
+                          <dt className="text-2xs uppercase tracking-wide text-slate-500">Sched. out</dt>
+                          <dd className="text-slate-800">
+                            {formatDate(p.expected_departure_date, 'Not set')}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-2xs uppercase tracking-wide text-slate-500">Sched. return</dt>
+                          <dd className="text-slate-800">{formatDate(p.expected_return_date, 'Not set')}</dd>
+                        </div>
+                      </dl>
+                      <p className="mt-2 text-xs leading-relaxed text-slate-600">{reason.text}</p>
+                      <p className="mt-1.5 text-xs text-slate-500">
+                        {p.sub_agents?.organisation_name ?? 'Unassigned'}
+                      </p>
+                    </div>
+                  </div>
+                </RecordCard>
+              );
+            })}
+          </div>
+
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            pageSize={PAGE_SIZE}
+            onPageChange={setPage}
+            itemLabel="pilgrims"
+          />
         </>
       )}
 
-      {/* Bulk confirmation modal */}
-      {bulkModal && (
-        <ConfirmDialog
-          open={bulkModal !== null}
-          title={bulkModal === 'arrival' ? 'Bulk Confirm Arrival' : 'Bulk Confirm Departure'}
-          confirmLabel={bulkModal === 'arrival' ? 'Confirm Arrivals' : 'Confirm Departures'}
-          onConfirm={handleBulkConfirm}
-          onCancel={() => { setBulkModal(null); setBulkError(null); }}
+      {canEditPilgrims && bulkKind && (
+        <BulkConfirmDialog
+          open
+          kind={bulkKind}
+          targets={bulkTargets}
+          officerName={profile?.full_name ?? ''}
           loading={bulkLoading}
-        >
-          {bulkError && (
-            <div className="mb-3 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-              {bulkError}
-            </div>
-          )}
-          <p className="text-sm text-slate-600">
-            You are about to confirm {bulkModal === 'arrival' ? 'arrival' : 'departure'} for{' '}
-            <span className="font-bold">{selectedIds.size}</span> pilgrims. All will share the same date, time, and flight details.
-          </p>
-          <div className="mt-4 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-                  {bulkModal === 'arrival' ? 'Arrival' : 'Departure'} Date <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="date"
-                  value={bulkDate}
-                  onChange={(e) => setBulkDate(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-                  {bulkModal === 'arrival' ? 'Arrival' : 'Departure'} Time <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="time"
-                  value={bulkTime}
-                  onChange={(e) => setBulkTime(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-                  {bulkModal === 'arrival' ? 'Arrival Port' : 'Departure Airport'} <span className="text-slate-400 font-normal">(optional)</span>
-                </label>
-                <input
-                  type="text"
-                  value={bulkPort}
-                  onChange={(e) => setBulkPort(e.target.value)}
-                  placeholder="e.g. Jeddah"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-                  Flight Number <span className="text-slate-400 font-normal">(optional)</span>
-                </label>
-                <input
-                  type="text"
-                  value={bulkFlight}
-                  onChange={(e) => setBulkFlight(e.target.value)}
-                  placeholder="e.g. SV600"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none transition-all"
-                />
-              </div>
-            </div>
-            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-              <p className="text-xs text-slate-500 flex items-center gap-1.5">
-                <Clock className="h-3.5 w-3.5" />
-                Confirming as: <span className="font-semibold text-slate-700">{profile?.full_name || 'Staff Member'}</span>
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Each pilgrim will receive an individual audit log entry.
-              </p>
-            </div>
-          </div>
-        </ConfirmDialog>
+          error={bulkError}
+          onCancel={() => {
+            setBulkKind(null);
+            setBulkError(null);
+          }}
+          onConfirm={handleBulkConfirm}
+        />
       )}
     </div>
   );

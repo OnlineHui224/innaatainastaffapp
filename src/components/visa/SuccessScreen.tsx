@@ -38,10 +38,10 @@ export function SuccessScreen({
 }: SuccessScreenProps) {
   return (
     <div className="max-w-2xl mx-auto">
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div className="rounded-lg border border-slate-300 bg-white overflow-hidden">
         {/* Success header */}
-        <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-6 py-8 text-center border-b border-green-100">
-          <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-green-500 text-white shadow-lg shadow-green-200">
+        <div className="bg-gradient-to-r from-emerald-50 to-emerald-50 px-6 py-8 text-center border-b border-emerald-200">
+          <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-emerald-700 text-white shadow-raised shadow-none">
             <CheckCircle2 className="h-9 w-9" />
           </div>
           <h3 className="mt-4 font-display font-bold text-xl text-navy-900">
@@ -118,22 +118,22 @@ export function SuccessScreen({
         </div>
 
         {/* Actions */}
-        <div className="px-6 py-5 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
+        <div className="px-6 py-5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row gap-3">
           <button
             onClick={onViewPilgrim}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-all"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 transition-colors"
           >
             <Eye className="h-4 w-4" /> View Pilgrim
           </button>
           <button
             onClick={onProcessAnother}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
           >
             <RotateCcw className="h-4 w-4" /> Process Another Visa
           </button>
           <button
             onClick={onViewHistory}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
           >
             <History className="h-4 w-4" /> View Automation History
           </button>
@@ -141,7 +141,7 @@ export function SuccessScreen({
       </div>
 
       {/* Journey status notice */}
-      <div className="mt-4 flex items-start gap-2.5 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3">
+      <div className="mt-4 flex items-start gap-2.5 rounded-md bg-blue-50 border border-blue-100 px-4 py-3">
         <Calendar className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
         <p className="text-xs text-blue-700 leading-relaxed">
           Journey arrival and departure statuses were not changed. Only visa information was saved to the pilgrim record.

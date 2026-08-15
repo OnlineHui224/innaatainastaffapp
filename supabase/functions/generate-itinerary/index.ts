@@ -93,6 +93,7 @@ function esc(value: unknown): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;")
     // strip control characters that are illegal in XML 1.0
+    // eslint-disable-next-line no-control-regex -- matching control characters is the point of this sanitiser
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 }
 

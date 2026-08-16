@@ -3,6 +3,16 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      /* Small-phone boundary. `max-xs:` targets 430px and below, where the
+         Flight Document Ops file rows become stacked cards rather than a
+         horizontally scrolling table. */
+      screens: {
+        xs: '431px',
+      },
+      spacing: {
+        /* 18px — the panel inset used across the Flight Document Ops screens */
+        4.5: '1.125rem',
+      },
       colors: {
         /* Enterprise blue — primary interactive colour */
         brand: {
@@ -83,6 +93,10 @@ export default {
         'slide-in': 'slideIn 0.2s ease-out forwards',
         'scale-in': 'scaleIn 0.15s ease-out forwards',
         shimmer: 'shimmer 1.6s linear infinite',
+        /* Indeterminate activity for extraction and generation — these steps
+           report a stage, never a percentage, so the motion must not imply one. */
+        sweep: 'sweep 1.5s ease-in-out infinite',
+        'pulse-dot': 'pulseDot 1.1s ease-in-out infinite',
       },
       keyframes: {
         fadeIn: {
@@ -104,6 +118,14 @@ export default {
         shimmer: {
           '0%': { backgroundPosition: '-800px 0' },
           '100%': { backgroundPosition: '800px 0' },
+        },
+        sweep: {
+          '0%': { transform: 'translateX(-45%)' },
+          '100%': { transform: 'translateX(345%)' },
+        },
+        pulseDot: {
+          '0%, 100%': { opacity: '0.3' },
+          '50%': { opacity: '1' },
         },
       },
     },

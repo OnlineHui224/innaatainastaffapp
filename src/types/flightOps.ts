@@ -4,250 +4,362 @@
  *
  * THIS IS A PRESENTATION MODEL, NOT A BACKEND CONTRACT.
  *
- * It exists so the Flight Document Ops screens can accurately represent the
- * *proven* operational workflow — the one the standalone extractor already runs
- * in production — while the permanent domain model stays untouched.
+ * It exists so the Flight Document Ops screens can represent the *proven*
+ * operational workflow while the permanent domain model stays untouched.
  *
  * The permanent flight domain model lives in `@/types/flight` (`FlightPassenger`,
  * `FlightSegment`, `FlightItineraryData`, …). It is richer than this one, it is
  * already referenced by the `generate-itinerary` Edge Function and the
  * `flight_itineraries` table, and it is deliberately NOT modified, renamed or
- * replaced by this file.
+ * replaced by this file. The two are reconciled in the later backend phase.
  *
- * The two models will be reconciled during the later backend integration phase.
- * Until then:
+ * Until then: nothing here is persisted, and nothing here is sent to an API.
  *
- *   - Nothing here is persisted.
- *   - Nothing here is sent to an API.
- *   - Nothing here should be treated as the permanent shape of a flight record.
- *
- * The shape below mirrors the fields the working extractor actually returns:
- * passenger_name, adults, children, pnr, primary_carrier, flights[], ai_confidence —
- * with each leg carrying departure/arrival city, date, times, carrier and flight
+ * The shape mirrors what the working extractor returns — passenger_name, adults,
+ * children, pnr, primary_carrier, flights[], ai_confidence — with each leg
+ * carrying departure/arrival airport and city, date, times, carrier and flight
  * number.
  */
 
 // ── Source documents ──
 
-/** PDF, JPG and PNG — the formats the proven workflow accepts. */
-export const ACCEPTED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+export const ACCEPTED_DOCUMENT_EXTENSIONS = ['PDF', 'JPG', 'JPEG', 'PNG'];
 export const ACCEPTED_DOCUMENT_LABEL = 'PDF, JPG or PNG';
-export const MAX_DOCUMENT_SIZE_MB = 10;
-export const MAX_DOCUMENT_SIZE_BYTES = MAX_DOCUMENT_SIZE_MB * 1024 * 1024;
-
-export type DocumentStatus = 'ready' | 'unsupported' | 'too_large' | 'failed';
 
 export interface SourceDocument {
   id: string;
   name: string;
-  sizeBytes: number;
-  mimeType: string;
-  status: DocumentStatus;
-  /** Why the document cannot be used. Present only for non-`ready` states. */
-  message?: string;
+  bytes: number;
+  ext: string;
 }
 
-export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
-  ready: 'Ready',
-  unsupported: 'Unsupported format',
-  too_large: 'Too large',
-  failed: 'Could not be read',
-};
+export function extensionOf(name: string): string {
+  const parts = String(name).split('.');
+  return (parts.length > 1 ? parts[parts.length - 1] : '?').toUpperCase();
+}
+
+export function isReadableExtension(ext: string): boolean {
+  return ACCEPTED_DOCUMENT_EXTENSIONS.includes(ext.toUpperCase());
+}
+
+export function formatBytes(bytes: number): string {
+  return bytes >= 1048576
+    ? `${(bytes / 1048576).toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
+}
+
+/** "Document" for PDFs, "Image" for photographs, "Unreadable" for anything else. */
+export function documentKind(ext: string): string {
+  if (!isReadableExtension(ext)) return 'Unreadable';
+  return ext.toUpperCase() === 'PDF' ? 'Document' : 'Image';
+}
+
+// ── Time handling ──
 
 /**
- * Classifies a picked file against the accepted formats and size ceiling.
- * Pure — it inspects metadata only and never reads the file's contents.
- */
-export function classifyDocument(file: File, id: string): SourceDocument {
-  const base = { id, name: file.name, sizeBytes: file.size, mimeType: file.type };
-
-  if (!ACCEPTED_DOCUMENT_TYPES.includes(file.type)) {
-    return { ...base, status: 'unsupported', message: `Only ${ACCEPTED_DOCUMENT_LABEL} files can be read.` };
-  }
-  if (file.size > MAX_DOCUMENT_SIZE_BYTES) {
-    return { ...base, status: 'too_large', message: `Maximum size is ${MAX_DOCUMENT_SIZE_MB} MB.` };
-  }
-  return { ...base, status: 'ready' };
-}
-
-export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// ── Staff review marks ──
-
-/**
- * How far a displayed value has travelled from a machine guess.
+ * Which clock the source ticket printed.
  *
- * This follows the same principle the Visa & Contract Logger already enforces:
- * TYPING IS NOT REVIEWING. Editing a value returns it to `ai_extracted`; only an
- * explicit staff action promotes it to `staff_reviewed`.
+ * Times are stored canonically as `HH:MM` and rendered back in the format the
+ * ticket itself used. The itinerary reproduces the ticket's own format — a time
+ * is NEVER silently converted between 12- and 24-hour.
  */
-export type ReviewMark = 'ai_extracted' | 'staff_reviewed';
+export type TimeFormat = '12h' | '24h';
 
-export const REVIEW_MARK_LABELS: Record<ReviewMark, string> = {
-  ai_extracted: 'AI Extracted',
-  staff_reviewed: 'Staff Reviewed',
-};
-
-export interface ReviewState {
-  mark: ReviewMark;
-  reviewedAt: string | null;
-  reviewedByName: string | null;
-  /** True once staff have changed any value the extractor produced. */
-  edited: boolean;
+export function minutesOf(time: string): number {
+  const [h, m] = String(time).split(':');
+  return Number(h) * 60 + Number(m);
 }
 
-export function unreviewed(): ReviewState {
-  return { mark: 'ai_extracted', reviewedAt: null, reviewedByName: null, edited: false };
+/** Renders a stored `HH:MM` in the format the source ticket used. */
+export function showTime(time: string, format: TimeFormat): string {
+  if (!time) return '';
+  if (format !== '12h') return String(time);
+  const [h, m] = String(time).split(':');
+  const hour = Number(h);
+  return `${hour % 12 || 12}:${m || '00'} ${hour < 12 ? 'am' : 'pm'}`;
 }
 
-/**
- * Records an edit. The review mark is cleared — changing a value is not the
- * same as reviewing it. This is the ONLY behaviour an edit may have.
- */
-export function markEdited(state: ReviewState): ReviewState {
-  return { ...state, mark: 'ai_extracted', reviewedAt: null, reviewedByName: null, edited: true };
+export function timeFormatNote(format: TimeFormat): string {
+  return format === '12h'
+    ? 'Times as printed on ticket · 12-hour'
+    : 'Times as printed on ticket · 24-hour';
 }
 
-/** Promotes to Staff Reviewed. This is the ONLY path to `staff_reviewed`. */
-export function markReviewed(state: ReviewState, officerName: string, now: string): ReviewState {
-  return { ...state, mark: 'staff_reviewed', reviewedAt: now, reviewedByName: officerName };
+/** Human duration, e.g. "6h 55m". */
+export function humanDuration(totalMinutes: number): string {
+  if (totalMinutes <= 0) return '—';
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return [h ? `${h}h` : '', m ? `${m}m` : ''].filter(Boolean).join(' ');
 }
 
-/** Clears a review without changing any value. */
-export function clearReview(state: ReviewState): ReviewState {
-  return { ...state, mark: 'ai_extracted', reviewedAt: null, reviewedByName: null };
+export function formatSectorDate(iso: string): string {
+  if (!iso) return 'Date missing';
+  const date = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return iso;
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+  const month = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ][date.getMonth()];
+  return `${weekday} ${date.getDate()} ${month} ${date.getFullYear()}`;
 }
 
 // ── Journey ──
 
-/** One flight sector, carrying exactly the fields the proven extractor returns. */
-export interface FlightLegView {
+export interface FlightSector {
   id: string;
-  departureCity: string;
-  departureAirport: string;
-  arrivalCity: string;
-  arrivalAirport: string;
-  /** As extracted, e.g. "23 JUL". Not normalised here. */
+  /** Departure airport code, e.g. "KAN". */
+  dep: string;
+  depCity: string;
+  /** Arrival airport code, e.g. "JED". */
+  arr: string;
+  arrCity: string;
+  /** ISO `YYYY-MM-DD`. */
   date: string;
-  departureTime: string;
-  arrivalTime: string;
+  /** Canonical `HH:MM`. */
+  depT: string;
+  /** Canonical `HH:MM`. */
+  arrT: string;
   carrier: string;
-  flightNumber: string;
-  review: ReviewState;
+  flight: string;
+  fmt: TimeFormat;
 }
 
-/** The fields of a leg an officer may correct on the review screen. */
-export type FlightLegField =
-  | 'departureCity'
-  | 'departureAirport'
-  | 'arrivalCity'
-  | 'arrivalAirport'
-  | 'date'
-  | 'departureTime'
-  | 'arrivalTime'
-  | 'carrier'
-  | 'flightNumber';
-
-export interface JourneySummaryView {
-  passengerName: string;
+export interface JourneySummary {
+  passenger: string;
   pnr: string;
-  primaryCarrier: string;
+  carrier: string;
   adults: number;
-  children: number;
-  review: ReviewState;
+  /** `null` when the extractor could not find a child count — never assumed zero. */
+  children: number | null;
 }
 
-export type SummaryField = 'passengerName' | 'pnr' | 'primaryCarrier' | 'adults' | 'children';
+/**
+ * How far a block has travelled from a machine guess.
+ *
+ * - `need`   — a required field is missing; the block cannot be reviewed yet.
+ * - `edited` — staff changed a value, so any prior review was cleared.
+ * - `ok`     — explicitly marked reviewed by a staff member.
+ * - `ai`     — as the extractor produced it, untouched and unreviewed.
+ */
+export type BlockState = 'ai' | 'edited' | 'ok' | 'need';
 
-export interface JourneyView {
-  summary: JourneySummaryView;
-  legs: FlightLegView[];
-  /** Extractor's own 0–1 confidence for the whole trip, when it reports one. */
-  aiConfidence: number | null;
-  extractedAt: string;
-  sourceFileNames: string[];
+export const BLOCK_STATE_LABELS: Record<BlockState, string> = {
+  ai: 'AI extracted',
+  edited: 'Edited — not yet reviewed',
+  ok: 'Staff reviewed',
+  need: 'Missing information',
+};
+
+/** Required sector fields, in the order the review screen reports them. */
+export function missingSectorFields(sector: FlightSector): string[] {
+  const missing: string[] = [];
+  if (!sector.dep) missing.push('departure airport');
+  if (!sector.arr) missing.push('arrival airport');
+  if (!sector.date) missing.push('date');
+  if (!sector.depT) missing.push('departure time');
+  if (!sector.arrT) missing.push('arrival time');
+  if (!sector.flight) missing.push('flight number');
+  return missing;
 }
 
-export function totalPax(summary: JourneySummaryView): number {
-  return summary.adults + summary.children;
+export function sectorState(
+  sector: FlightSector,
+  reviewed: boolean,
+  edited: boolean,
+): BlockState {
+  if (missingSectorFields(sector).length > 0) return 'need';
+  if (reviewed) return 'ok';
+  if (edited) return 'edited';
+  return 'ai';
 }
 
-export function emptyJourney(): JourneyView {
+export function summaryState(
+  summary: JourneySummary | null,
+  reviewed: boolean,
+  edited: boolean,
+): BlockState {
+  if (!summary || summary.children === null || !summary.passenger || !summary.pnr) return 'need';
+  if (reviewed) return 'ok';
+  if (edited) return 'edited';
+  return 'ai';
+}
+
+export function totalPax(summary: JourneySummary | null): number | null {
+  if (!summary || summary.children === null) return null;
+  return (Number(summary.adults) || 0) + (Number(summary.children) || 0);
+}
+
+/**
+ * A date-time for a sector endpoint.
+ *
+ * An arrival earlier in the clock than its departure is treated as landing the
+ * next day, which is how overnight sectors read on a ticket.
+ */
+export function sectorStamp(sector: FlightSector, which: 'dep' | 'arr'): Date | null {
+  const time = which === 'dep' ? sector.depT : sector.arrT;
+  if (!time || !sector.date) return null;
+  const stamp = new Date(`${sector.date}T${time}:00`);
+  if (Number.isNaN(stamp.getTime())) return null;
+  if (which === 'arr' && sector.depT && minutesOf(sector.arrT) < minutesOf(sector.depT)) {
+    stamp.setDate(stamp.getDate() + 1);
+  }
+  return stamp;
+}
+
+/** True when a sector lands on the day after it departs. */
+export function arrivesNextDay(sector: FlightSector): boolean {
+  return Boolean(
+    sector.depT && sector.arrT && minutesOf(sector.arrT) < minutesOf(sector.depT),
+  );
+}
+
+export function sectorDurationMinutes(sector: FlightSector): number {
+  if (!sector.depT || !sector.arrT) return 0;
+  return (minutesOf(sector.arrT) - minutesOf(sector.depT) + 1440) % 1440;
+}
+
+/** What sits between two consecutive sectors: a connection, a stay, or a fault. */
+export type LinkKind = 'none' | 'connection' | 'ground_stay' | 'break';
+
+export interface SectorLink {
+  kind: LinkKind;
+  text: string;
+}
+
+/**
+ * Reads the join between the previous sector and this one.
+ *
+ * A break is a genuine operational fault — the journey does not join up, or the
+ * times overlap — and it blocks generation until staff resolve it.
+ */
+export function linkBetween(previous: FlightSector | null, sector: FlightSector): SectorLink {
+  if (!previous || !previous.arr || !sector.dep) return { kind: 'none', text: '' };
+
+  if (previous.arr !== sector.dep) {
+    return {
+      kind: 'break',
+      text: `Sequence break — the previous sector arrives at ${previous.arr} but this one departs from ${sector.dep}. Reorder, correct or add the missing sector.`,
+    };
+  }
+
+  const arrivedAt = sectorStamp(previous, 'arr');
+  const departsAt = sectorStamp(sector, 'dep');
+  if (!arrivedAt || !departsAt) return { kind: 'none', text: '' };
+
+  const gap = Math.round((departsAt.getTime() - arrivedAt.getTime()) / 60000);
+  if (gap < 0) {
+    return {
+      kind: 'break',
+      text: 'Times overlap — this sector departs before the previous one arrives.',
+    };
+  }
+  if (gap > 1440) {
+    return {
+      kind: 'ground_stay',
+      text: `Ground stay in ${sector.depCity || sector.dep} · ${Math.round(gap / 1440)} days`,
+    };
+  }
   return {
-    summary: {
-      passengerName: '',
-      pnr: '',
-      primaryCarrier: '',
-      adults: 0,
-      children: 0,
-      review: unreviewed(),
-    },
-    legs: [],
-    aiConfidence: null,
-    extractedAt: '',
-    sourceFileNames: [],
+    kind: 'connection',
+    text: `Connection in ${sector.depCity || sector.dep} · ${humanDuration(gap)}`,
   };
 }
 
-/** True when every sector and the journey summary carry an explicit staff review. */
-export function allReviewed(journey: JourneyView): boolean {
-  if (journey.legs.length === 0) return false;
-  return (
-    journey.summary.review.mark === 'staff_reviewed' &&
-    journey.legs.every((leg) => leg.review.mark === 'staff_reviewed')
-  );
+/** Number of genuine sequence faults across the whole journey. */
+export function countSequenceBreaks(sectors: FlightSector[]): number {
+  return sectors.reduce((total, sector, index) => {
+    const link = linkBetween(index > 0 ? sectors[index - 1] : null, sector);
+    return total + (link.kind === 'break' ? 1 : 0);
+  }, 0);
 }
 
-export function countReviewed(journey: JourneyView): number {
-  return (
-    (journey.summary.review.mark === 'staff_reviewed' ? 1 : 0) +
-    journey.legs.filter((leg) => leg.review.mark === 'staff_reviewed').length
-  );
+/** "KAN → ADD → JED → KAN" */
+export function routeLine(sectors: FlightSector[]): string {
+  if (sectors.length === 0) return '';
+  const codes = sectors.map((s) => s.dep || '···');
+  codes.push(sectors[sectors.length - 1].arr || '···');
+  return codes.join(' → ');
 }
 
-/** Total number of things requiring an explicit review: the summary plus each sector. */
-export function reviewableCount(journey: JourneyView): number {
-  return 1 + journey.legs.length;
-}
+// ── Workflow ──
 
-/**
- * Sectors missing a field the itinerary document needs.
- *
- * Reported to staff as something to correct — never silently defaulted, because
- * a blank cell in the generated itinerary is an operational failure.
- */
-export function legsMissingFields(journey: JourneyView): Array<{ index: number; missing: string[] }> {
-  const REQUIRED: Array<[FlightLegField, string]> = [
-    ['departureCity', 'From'],
-    ['arrivalCity', 'To'],
-    ['date', 'Date'],
-    ['departureTime', 'Departure'],
-    ['arrivalTime', 'Arrival'],
-    ['carrier', 'Carrier'],
-    ['flightNumber', 'Flight number'],
-  ];
+export type FlightStage =
+  | 'upload'
+  | 'processing'
+  | 'failed'
+  | 'review'
+  | 'trip'
+  | 'confirm'
+  | 'generating'
+  | 'genfailed'
+  | 'done';
 
-  return journey.legs
-    .map((leg, index) => ({
-      index,
-      missing: REQUIRED.filter(([key]) => !String(leg[key] ?? '').trim()).map(([, label]) => label),
-    }))
-    .filter((entry) => entry.missing.length > 0);
-}
+export const FLIGHT_STEP_LABELS = [
+  'Upload Documents',
+  'Review Extraction',
+  'Trip Details',
+  'Confirm',
+  'Generate',
+  'Download',
+] as const;
+
+/** Which numbered step each stage sits under. */
+export const STAGE_STEP_INDEX: Record<FlightStage, number> = {
+  upload: 0,
+  processing: 0,
+  failed: 0,
+  review: 1,
+  trip: 2,
+  confirm: 3,
+  generating: 4,
+  genfailed: 4,
+  done: 5,
+};
+
+/** The stage a completed step returns to when its rail entry is selected. */
+export const STEP_RETURN_STAGE: Array<FlightStage | null> = [
+  'upload',
+  'review',
+  'trip',
+  'confirm',
+  null,
+  null,
+];
+
+export const STAGE_LABELS: Record<FlightStage, string> = {
+  upload: 'Upload Documents',
+  processing: 'Extracting',
+  failed: 'Extraction failed',
+  review: 'Review Extraction',
+  trip: 'Trip Details',
+  confirm: 'Confirm',
+  generating: 'Generating',
+  genfailed: 'Generation failed',
+  done: 'Download',
+};
+
+/** Named stages with their sub-notes. No percentage — the extractor reports none. */
+export const EXTRACTION_STAGES: Array<[string, string]> = [
+  ['Reading travel documents', 'PDF and image pages'],
+  ['Extracting passenger information', 'Name, PNR, party size'],
+  ['Extracting flight sectors', 'Airports, dates, times'],
+  ['Checking journey sequence', 'Continuity between sectors'],
+  ['Preparing staff review', ''],
+];
+
+export const GENERATION_STAGES: Array<[string, string]> = [
+  ['Preparing itinerary', 'Reading the confirmed record'],
+  ['Building flight schedule', 'One row per sector, in order'],
+  ['Adding accommodation information', 'Makkah and Madinah'],
+  ['Formatting Word document', 'Standard Umrah package layout'],
+  ['Finalising document', ''],
+];
 
 // ── Trip details ──
 
-/**
- * The operational details staff add to an extracted journey.
- *
- * Group name is optional in the proven workflow; the hotels come from the
- * existing HajjERP hotel reference search.
- */
-export interface TripDetailsView {
+export interface TripDetails {
   groupName: string;
   makkahHotelId: string | null;
   makkahHotelName: string;
@@ -255,7 +367,7 @@ export interface TripDetailsView {
   madinahHotelName: string;
 }
 
-export function emptyTripDetails(): TripDetailsView {
+export function emptyTripDetails(): TripDetails {
   return {
     groupName: '',
     makkahHotelId: null,
@@ -266,190 +378,28 @@ export function emptyTripDetails(): TripDetailsView {
 }
 
 /**
- * Filename the proven generator produces: group name when given, otherwise the
- * passenger name; non-alphanumerics dropped, spaces become underscores.
- * Mirrored here so the confirmation and success screens can show staff the real
- * name in advance. It does not generate the document.
+ * The filename the existing generator produces: the group name when set,
+ * otherwise the passenger's surname. Shown to staff in advance so the name is
+ * never a surprise. This does not generate anything.
  */
-export function projectedFileName(details: TripDetailsView, summary: JourneySummaryView): string {
-  const source = details.groupName.trim() || summary.passengerName.trim();
-  const safe = Array.from(source)
-    .filter((char) => /[a-zA-Z0-9\s]/.test(char))
-    .join('')
-    .trim();
-  return `${(safe || 'Travel').replace(/\s+/g, '_')}_Itinerary.docx`;
+export function plannedFileName(groupName: string, passenger: string): string {
+  const surname = String(passenger || 'Traveller').trim().split(/\s+/).pop() || 'Traveller';
+  const base = (groupName || surname || 'Itinerary').trim().replace(/\s+/g, '_').toUpperCase();
+  return `${base}_Itinerary.docx`;
 }
 
-// ── Workflow ──
+// ── Carrier display ──
 
-export type FlightOpsStep = 'upload' | 'review' | 'trip_details' | 'confirm' | 'generate' | 'download';
-
-export const FLIGHT_OPS_STEPS: FlightOpsStep[] = [
-  'upload',
-  'review',
-  'trip_details',
-  'confirm',
-  'generate',
-  'download',
-];
-
-export const FLIGHT_OPS_STEP_LABELS: Record<FlightOpsStep, string> = {
-  upload: 'Upload Documents',
-  review: 'Review Extraction',
-  trip_details: 'Trip Details',
-  confirm: 'Confirm',
-  generate: 'Generate',
-  download: 'Download',
+/** Display names for the carriers this operation routinely books. */
+export const AIRLINE_NAMES: Record<string, string> = {
+  ET: 'Ethiopian Airlines',
+  SV: 'Saudia',
+  MS: 'EgyptAir',
+  WY: 'Oman Air',
+  QR: 'Qatar Airways',
 };
 
-/** Compact labels for narrow viewports, where the full label would wrap badly. */
-export const FLIGHT_OPS_STEP_SHORT_LABELS: Record<FlightOpsStep, string> = {
-  upload: 'Upload',
-  review: 'Review',
-  trip_details: 'Trip',
-  confirm: 'Confirm',
-  generate: 'Generate',
-  download: 'Download',
-};
-
-// ── Extraction progress ──
-
-/**
- * Named stages, not a percentage.
- *
- * The extractor reports no progress figure, so the interface shows which stage
- * is running rather than inventing a completion percentage.
- */
-export type ExtractionStage = 'reading' | 'passenger' | 'sectors' | 'sequence' | 'preparing';
-
-export const EXTRACTION_STAGES: ExtractionStage[] = [
-  'reading',
-  'passenger',
-  'sectors',
-  'sequence',
-  'preparing',
-];
-
-export const EXTRACTION_STAGE_LABELS: Record<ExtractionStage, string> = {
-  reading: 'Reading travel documents',
-  passenger: 'Extracting passenger information',
-  sectors: 'Extracting flight sectors',
-  sequence: 'Checking journey sequence',
-  preparing: 'Preparing review',
-};
-
-// ── Generation progress ──
-
-export type GenerationStage = 'preparing' | 'schedule' | 'accommodation' | 'formatting' | 'finalising';
-
-export const GENERATION_STAGES: GenerationStage[] = [
-  'preparing',
-  'schedule',
-  'accommodation',
-  'formatting',
-  'finalising',
-];
-
-export const GENERATION_STAGE_LABELS: Record<GenerationStage, string> = {
-  preparing: 'Preparing itinerary',
-  schedule: 'Building flight schedule',
-  accommodation: 'Adding accommodation information',
-  formatting: 'Formatting document',
-  finalising: 'Finalising Word document',
-};
-
-// ── Failures ──
-
-/**
- * The operational failures staff can actually hit. Each maps to a title, a
- * plain-language explanation and a next step — never a raw API response.
- */
-export type FlightOpsFailure =
-  | 'no_document'
-  | 'unsupported_document'
-  | 'extraction_failed'
-  | 'partial_extraction'
-  | 'missing_flight_fields'
-  | 'ambiguous_journey'
-  | 'generation_failed'
-  | 'network_interrupted';
-
-export interface FailureCopy {
-  title: string;
-  detail: string;
-  /** What staff can do next. Never blank — an error without a next step is a dead end. */
-  nextStep: string;
-  tone: 'warning' | 'critical';
-}
-
-export const FLIGHT_FAILURE_COPY: Record<FlightOpsFailure, FailureCopy> = {
-  no_document: {
-    title: 'No travel document added',
-    detail: 'At least one ticket document is needed before travel information can be extracted.',
-    nextStep: `Add a ${ACCEPTED_DOCUMENT_LABEL} file to continue.`,
-    tone: 'warning',
-  },
-  unsupported_document: {
-    title: 'Some files cannot be read',
-    detail: `Only ${ACCEPTED_DOCUMENT_LABEL} files up to ${MAX_DOCUMENT_SIZE_MB} MB can be processed.`,
-    nextStep: 'Remove the files marked below, or replace them with a supported format.',
-    tone: 'warning',
-  },
-  extraction_failed: {
-    title: 'Travel information could not be extracted',
-    detail: 'The documents were received but no journey could be read from them.',
-    nextStep: 'Try again, or return to the uploads and check the documents are legible.',
-    tone: 'critical',
-  },
-  partial_extraction: {
-    title: 'Some documents could not be read',
-    detail: 'A journey was extracted, but not every uploaded document contributed to it.',
-    nextStep: 'Review the sectors below carefully, or return to the uploads and retry the failed files.',
-    tone: 'warning',
-  },
-  missing_flight_fields: {
-    title: 'Some sectors are incomplete',
-    detail: 'One or more flight sectors are missing information the itinerary document needs.',
-    nextStep: 'Complete the highlighted fields before continuing.',
-    tone: 'warning',
-  },
-  ambiguous_journey: {
-    title: 'Journey sequence needs checking',
-    detail: 'The flight sectors do not read as one continuous journey in date order.',
-    nextStep: 'Check the sector dates and correct any that are out of sequence.',
-    tone: 'warning',
-  },
-  generation_failed: {
-    title: 'The itinerary could not be generated',
-    detail: 'The document was not produced. Nothing has been saved and no information was lost.',
-    nextStep: 'Try generating again, or go back and check the trip details.',
-    tone: 'critical',
-  },
-  network_interrupted: {
-    title: 'Connection interrupted',
-    detail: 'The connection dropped part-way through. The step did not complete.',
-    nextStep: 'Check your connection and try again — your uploads and corrections are still here.',
-    tone: 'critical',
-  },
-};
-
-/**
- * Detects sectors that are out of chronological order.
- *
- * Only reports when dates are genuinely comparable, so an unusual but valid date
- * format never produces a false warning. Returns the indices that break sequence.
- */
-export function outOfSequenceLegs(legs: FlightLegView[]): number[] {
-  const parsed = legs.map((leg) => {
-    const value = Date.parse(leg.date);
-    return Number.isNaN(value) ? null : value;
-  });
-
-  if (parsed.some((value) => value === null)) return [];
-
-  const broken: number[] = [];
-  for (let i = 1; i < parsed.length; i += 1) {
-    if ((parsed[i] as number) < (parsed[i - 1] as number)) broken.push(i);
-  }
-  return broken;
+export function carrierLabel(code: string): string {
+  if (!code) return 'Carrier not set';
+  return `${AIRLINE_NAMES[code] || code} · ${code}`;
 }

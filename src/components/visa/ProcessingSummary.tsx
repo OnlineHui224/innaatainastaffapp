@@ -45,7 +45,7 @@ function Row({ icon: Icon, label, value, isSet, isCustom }: RowProps) {
         <Icon className="h-3.5 w-3.5" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-[11px] text-slate-400 font-medium leading-tight">{label}</p>
+        <p className="text-[11px] text-slate-500 font-medium leading-tight">{label}</p>
         <div className="flex items-center gap-1.5 mt-0.5">
           <p className={cn(
             'text-xs font-medium truncate leading-tight',
@@ -67,7 +67,7 @@ function Row({ icon: Icon, label, value, isSet, isCustom }: RowProps) {
 function SectionLabel({ children }: { children: string }) {
   return (
     <div className="pt-3 pb-1">
-      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{children}</p>
+      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{children}</p>
     </div>
   );
 }
@@ -91,7 +91,7 @@ export function ProcessingSummary({
   return (
     <div className="rounded-lg border border-slate-300 bg-white lg:sticky lg:top-6">
       <div className="px-5 py-4 border-b border-slate-200">
-        <h3 className="font-display font-bold text-base text-navy-900">Processing Summary</h3>
+        <h2 className="font-display font-bold text-base text-navy-900">Processing Summary</h2>
         <p className="mt-0.5 text-xs text-slate-500">Current case overview</p>
       </div>
 
@@ -191,7 +191,7 @@ export function ProcessingSummary({
                   <li key={field}>{field}</li>
                 ))}
                 {missingFields.length > 5 && (
-                  <li className="text-slate-400">+{missingFields.length - 5} more</li>
+                  <li className="text-slate-500">+{missingFields.length - 5} more</li>
                 )}
               </ul>
             )}

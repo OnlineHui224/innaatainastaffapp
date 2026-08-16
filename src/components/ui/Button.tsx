@@ -32,9 +32,13 @@ const VARIANTS: Record<ButtonVariant, string> = {
   confirm: 'border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800 hover:border-emerald-800',
 };
 
+/**
+ * Phones get a 44px minimum touch target; desktop keeps the compact heights.
+ * `min-height` only grows the control, so alignment above `sm` is unchanged.
+ */
 const SIZES: Record<ButtonSize, string> = {
-  sm: 'h-8 px-3 text-xs',
-  md: 'h-10 px-4 text-sm',
+  sm: 'h-8 px-3 text-xs max-sm:min-h-[44px]',
+  md: 'h-10 px-4 text-sm max-sm:min-h-[44px]',
   lg: 'h-11 px-5 text-sm',
 };
 
@@ -128,7 +132,7 @@ export function IconButton({
       className={cn(
         'inline-flex shrink-0 items-center justify-center rounded-md border transition-colors',
         'disabled:opacity-40 disabled:cursor-not-allowed',
-        size === 'sm' ? 'h-8 w-8' : 'h-10 w-10',
+        size === 'sm' ? 'h-8 w-8 max-sm:h-11 max-sm:w-11' : 'h-10 w-10 max-sm:h-11 max-sm:w-11',
         variant === 'ghost' && 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-900',
         variant === 'secondary' && 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50',
         variant === 'danger' && 'border-transparent text-slate-500 hover:bg-red-50 hover:text-red-700',

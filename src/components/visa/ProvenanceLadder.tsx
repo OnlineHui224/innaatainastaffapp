@@ -71,7 +71,7 @@ function LadderStage({ stage, state }: { stage: CaseStage; state: LadderStageSta
   const { reached, detail } = state;
 
   const styles = !reached
-    ? 'border-dashed border-slate-300 bg-white text-slate-400'
+    ? 'border-dashed border-slate-300 bg-white text-slate-500'
     : stage === 'ai_extracted'
       ? 'border-dashed border-amber-500 bg-amber-50 text-amber-900'
       : stage === 'human_reviewed'

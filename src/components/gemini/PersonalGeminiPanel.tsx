@@ -238,11 +238,14 @@ export function PersonalGeminiPanel() {
                         if (['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft'].includes(event.key)) {
                           event.preventDefault();
                           const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1;
-                          const next =
-                            DEMO_WORKSPACES[
-                              (index + step + DEMO_WORKSPACES.length) % DEMO_WORKSPACES.length
-                            ];
-                          setWorkspaceId(next.id);
+                          const at = (index + step + DEMO_WORKSPACES.length) % DEMO_WORKSPACES.length;
+                          setWorkspaceId(DEMO_WORKSPACES[at].id);
+                          // A radiogroup moves focus with the selection, so a
+                          // second arrow press continues from the new option
+                          // rather than repeating from the old one.
+                          const group = event.currentTarget.parentElement;
+                          const options = group?.querySelectorAll<HTMLElement>('[role="radio"]');
+                          options?.[at]?.focus();
                         }
                       }}
                       className={cn(

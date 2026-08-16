@@ -95,7 +95,7 @@ export default function MyAccountPage() {
                 aria-pressed={state === value}
                 onClick={() => (value === 'checking' ? runCheck() : go(value))}
                 className={cn(
-                  'min-h-[32px] rounded-md border px-2.5 py-1.5 text-xs font-bold transition-colors',
+                  'min-h-[44px] rounded-md border px-2.5 py-1.5 text-xs font-bold transition-colors sm:min-h-[32px]',
                   state === value
                     ? 'border-navy-800 bg-navy-800 text-white'
                     : 'border-slate-300 bg-white text-slate-700 hover:border-brand-500',

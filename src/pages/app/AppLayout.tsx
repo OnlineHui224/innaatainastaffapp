@@ -85,6 +85,25 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, [drawerOpen]);
 
+  /**
+   * Closes the drawer when the viewport grows past the desktop breakpoint.
+   *
+   * The drawer markup is hidden by CSS at `lg`, but the open state also drives
+   * the body scroll lock. Without this, resizing to desktop while the drawer is
+   * open leaves the page permanently unscrollable with nothing on screen to
+   * explain why.
+   */
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const close = () => {
+      if (desktop.matches) setDrawerOpen(false);
+    };
+    close();
+    desktop.addEventListener('change', close);
+    return () => desktop.removeEventListener('change', close);
+  }, [drawerOpen]);
+
   async function handleSignOut() {
     await signOut();
     navigate('/login');
@@ -189,7 +208,7 @@ export default function AppLayout() {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      <a href="#main-content" className="skip-link rounded-md bg-navy-900 px-4 py-2 text-sm font-semibold text-white">
+      <a href="#main-content" className="skip-link inline-flex min-h-[44px] items-center rounded-md bg-navy-900 px-4 py-2 text-sm font-semibold text-white">
         Skip to main content
       </a>
 
@@ -214,7 +233,7 @@ export default function AppLayout() {
               type="button"
               onClick={() => setDrawerOpen(false)}
               aria-label="Close navigation menu"
-              className="absolute right-2 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-md text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+              className="absolute right-2 top-3 z-10 flex h-11 w-11 items-center justify-center rounded-md text-white/70 transition-colors hover:bg-white/10 hover:text-white"
             >
               <X className="h-5 w-5" aria-hidden="true" />
             </button>
@@ -231,7 +250,7 @@ export default function AppLayout() {
             onClick={() => setDrawerOpen(true)}
             aria-label="Open navigation menu"
             aria-expanded={drawerOpen}
-            className="flex h-10 w-10 items-center justify-center rounded-md transition-colors hover:bg-white/10"
+            className="flex h-11 w-11 items-center justify-center rounded-md transition-colors hover:bg-white/10"
           >
             <Menu className="h-5 w-5" aria-hidden="true" />
           </button>
@@ -243,7 +262,7 @@ export default function AppLayout() {
             type="button"
             onClick={handleSignOut}
             aria-label="Sign out"
-            className="flex h-10 w-10 items-center justify-center rounded-md transition-colors hover:bg-white/10"
+            className="flex h-11 w-11 items-center justify-center rounded-md transition-colors hover:bg-white/10"
           >
             <LogOut className="h-5 w-5" aria-hidden="true" />
           </button>

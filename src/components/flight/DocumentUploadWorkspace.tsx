@@ -116,6 +116,7 @@ export function DocumentUploadWorkspace({
           ref={inputRef}
           type="file"
           multiple
+          aria-label="Add travel ticket documents"
           accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
           className="sr-only"
           disabled={disabled}
@@ -226,7 +227,7 @@ export function DocumentUploadWorkspace({
               type="button"
               onClick={onClear}
               disabled={disabled}
-              className="min-h-[36px] whitespace-nowrap rounded px-2 py-1 text-xs font-bold text-brand-700 transition-colors hover:text-brand-800 disabled:opacity-40"
+              className="min-h-[44px] whitespace-nowrap rounded px-2.5 py-1 text-xs font-bold text-brand-700 transition-colors hover:bg-brand-50 hover:text-brand-800 disabled:opacity-40 sm:min-h-[36px]"
             >
               Clear all
             </button>
@@ -239,7 +240,7 @@ export function DocumentUploadWorkspace({
             type="button"
             onClick={onLoadSample}
             disabled={disabled}
-            className="min-h-[36px] rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 hover:text-navy-900 disabled:opacity-40"
+            className="min-h-[44px] rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 hover:text-navy-900 disabled:opacity-40 sm:min-h-[36px]"
           >
             Load sample documents
           </button>

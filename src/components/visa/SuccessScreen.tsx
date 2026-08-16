@@ -60,7 +60,7 @@ export function SuccessScreen({
                 <User className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs text-slate-400 font-medium">Linked Pilgrim</p>
+                <p className="text-xs text-slate-500 font-medium">Linked Pilgrim</p>
                 <p className="text-sm text-slate-800 font-medium truncate">{details.pilgrimName || extraction.passengerName.value || '—'}</p>
               </div>
             </div>
@@ -70,7 +70,7 @@ export function SuccessScreen({
                 <Building2 className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs text-slate-400 font-medium">Agent</p>
+                <p className="text-xs text-slate-500 font-medium">Agent</p>
                 <p className="text-sm text-slate-800 font-medium truncate">{details.agentName || '—'}</p>
               </div>
             </div>
@@ -80,7 +80,7 @@ export function SuccessScreen({
                 <FileText className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs text-slate-400 font-medium">Visa Number</p>
+                <p className="text-xs text-slate-500 font-medium">Visa Number</p>
                 <p className="text-sm text-slate-800 font-medium truncate">{extraction.visaNumber.value || '—'}</p>
               </div>
             </div>
@@ -90,7 +90,7 @@ export function SuccessScreen({
                 <Bookmark className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs text-slate-400 font-medium">Passport Number</p>
+                <p className="text-xs text-slate-500 font-medium">Passport Number</p>
                 <p className="text-sm text-slate-800 font-medium truncate">{extraction.passportNumber.value || details.passportNumber || '—'}</p>
               </div>
             </div>
@@ -100,7 +100,7 @@ export function SuccessScreen({
                 <User className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs text-slate-400 font-medium">Saved By</p>
+                <p className="text-xs text-slate-500 font-medium">Saved By</p>
                 <p className="text-sm text-slate-800 font-medium truncate">{savedBy}</p>
               </div>
             </div>
@@ -110,7 +110,7 @@ export function SuccessScreen({
                 <Calendar className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs text-slate-400 font-medium">Date and Time</p>
+                <p className="text-xs text-slate-500 font-medium">Date and Time</p>
                 <p className="text-sm text-slate-800 font-medium truncate">{formatDateTime(savedAt)}</p>
               </div>
             </div>

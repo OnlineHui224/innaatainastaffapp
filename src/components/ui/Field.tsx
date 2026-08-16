@@ -80,7 +80,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       aria-invalid={invalid || undefined}
       className={cn(
         CONTROL,
-        'h-10 px-3',
+        'h-10 px-3 max-sm:min-h-[44px]',
         Boolean(leadingIcon) && 'pl-9',
         identifier && 'identifier',
         invalid && CONTROL_INVALID,
@@ -133,7 +133,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
     <select
       ref={ref}
       aria-invalid={invalid || undefined}
-      className={cn(CONTROL, 'h-10 px-2.5 font-medium', invalid && CONTROL_INVALID, className)}
+      className={cn(CONTROL, 'h-10 px-2.5 font-medium max-sm:min-h-[44px]', invalid && CONTROL_INVALID, className)}
       {...rest}
     >
       {children}
@@ -178,7 +178,7 @@ export function SearchInput({
         type="search"
         value={value}
         onChange={(e) => onValueChange(e.target.value)}
-        className={cn(CONTROL, 'h-10 pl-9 pr-9')}
+        className={cn(CONTROL, 'h-10 pl-9 pr-9 max-sm:min-h-[44px]')}
         {...rest}
       />
       {value && (

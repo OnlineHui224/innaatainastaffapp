@@ -38,7 +38,7 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
   );
 }
 
-const inputClass = 'w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-600  transition-colors disabled:bg-slate-50 disabled:opacity-50';
+const inputClass = 'w-full min-h-[44px] rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-500 focus:border-brand-600 transition-colors disabled:bg-slate-50 disabled:opacity-50 sm:min-h-0';
 
 export function CaseDetailsCard({
   details,
@@ -305,7 +305,7 @@ export function CaseDetailsCard({
     <div className="rounded-lg border border-slate-300 bg-white">
       <div className="px-6 py-5 border-b border-slate-200">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h3 className="font-display text-lg font-bold text-navy-900">A · Operational details</h3>
+          <h2 className="font-display text-lg font-bold text-navy-900">A · Operational details</h2>
           <span className="text-xs text-slate-500">Entered by staff — not AI</span>
         </div>
         <p className="mt-1 text-sm text-slate-500">
@@ -320,7 +320,7 @@ export function CaseDetailsCard({
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-50 text-brand-700">
               <span className="text-xs font-bold">A</span>
             </div>
-            <h4 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Responsibility</h4>
+            <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Responsibility</h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
@@ -338,7 +338,7 @@ export function CaseDetailsCard({
                 error={!!errors.pilgrimId}
               />
               {errors.pilgrimId && <p className="mt-1 text-xs text-red-600">{errors.pilgrimId}</p>}
-              <p className="mt-1 text-xs text-slate-400">Search by passenger name, passport number, or agent name</p>
+              <p className="mt-1 text-xs text-slate-500">Search by passenger name, passport number, or agent name</p>
             </div>
 
             {/* Responsible Agent — with manual entry */}
@@ -361,7 +361,7 @@ export function CaseDetailsCard({
                     type="button"
                     onClick={() => { setShowNewAgent(true); onChange({ agentId: null, agentIsProposed: true, newAgent: { organisationName: '', contactPerson: '', phoneNumber: '', email: '', internalNote: '' } }); }}
                     disabled={disabled}
-                    className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
+                    className="mt-1.5 inline-flex min-h-[44px] items-center gap-1 rounded text-xs font-medium text-brand-600 transition-colors hover:text-brand-700 sm:min-h-0"
                   >
                     <Plus className="h-3 w-3" /> Agent not found? Enter a new agent
                   </button>
@@ -453,12 +453,12 @@ export function CaseDetailsCard({
                 icon={User}
                 disabled={disabled}
               />
-              <p className="mt-1 text-xs text-slate-400">When applicable</p>
+              <p className="mt-1 text-xs text-slate-500">When applicable</p>
             </div>
 
             <div>
               <FieldLabel>Visa Company</FieldLabel>
-              <input type="text" value={details.visaCompany} onChange={(e) => onChange({ visaCompany: e.target.value })} placeholder="Enter visa company name" disabled={disabled} className={inputClass} />
+              <input type="text" value={details.visaCompany} onChange={(e) => onChange({ visaCompany: e.target.value })} aria-label="Visa company name" placeholder="Enter visa company name" disabled={disabled} className={inputClass} />
             </div>
           </div>
         </section>
@@ -469,11 +469,11 @@ export function CaseDetailsCard({
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-50 text-brand-700">
               <span className="text-xs font-bold">B</span>
             </div>
-            <h4 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Ground Transportation</h4>
+            <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Ground Transportation</h3>
           </div>
 
           {transportLoading ? (
-            <div className="flex items-center justify-center py-6 text-sm text-slate-400">
+            <div className="flex items-center justify-center py-6 text-sm text-slate-500">
               <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading transport routes...
             </div>
           ) : !showCustomRoute ? (
@@ -508,37 +508,38 @@ export function CaseDetailsCard({
               <div className="md:col-span-2">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md bg-slate-50 border border-slate-200 p-4">
                   <div>
-                    <p className="text-xs text-slate-400 font-medium mb-0.5">Reference Price</p>
+                    <p className="text-xs text-slate-500 font-medium mb-0.5">Reference Price</p>
                     <div className="flex items-center gap-1.5">
                       <DollarSign className="h-4 w-4 text-slate-500" />
                       {rateLoading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />
                       ) : details.transport.referencePrice != null ? (
                         <span className="text-sm font-bold text-slate-800">SAR {details.transport.referencePrice.toFixed(2)}</span>
                       ) : (
-                        <span className="text-sm text-slate-400">Select route & vehicle</span>
+                        <span className="text-sm text-slate-500">Select route & vehicle</span>
                       )}
                     </div>
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400 font-medium mb-0.5">Number of Vehicles</p>
+                    <p className="text-xs text-slate-500 font-medium mb-0.5">Number of Vehicles</p>
                     <input
+                      aria-label="Number of vehicles"
                       type="number"
                       min={1}
                       value={details.transport.numberOfVehicles}
                       onChange={handleNumVehiclesChange}
                       disabled={disabled}
-                      className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-brand-600 transition-colors disabled:bg-slate-50"
+                      className="w-20 min-h-[44px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 transition-colors focus:border-brand-600 disabled:bg-slate-50 sm:min-h-0"
                     />
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400 font-medium mb-0.5">Calculated Total</p>
+                    <p className="text-xs text-slate-500 font-medium mb-0.5">Calculated Total</p>
                     <div className="flex items-center gap-1.5">
                       <Calculator className="h-4 w-4 text-brand-500" />
                       {effectivePrice != null ? (
                         <span className="text-sm font-bold text-brand-700">SAR {(effectivePrice * details.transport.numberOfVehicles).toFixed(2)}</span>
                       ) : (
-                        <span className="text-sm text-slate-400">—</span>
+                        <span className="text-sm text-slate-500">—</span>
                       )}
                     </div>
                   </div>
@@ -594,32 +595,32 @@ export function CaseDetailsCard({
 
               <div>
                 <FieldLabel>Transport Provider</FieldLabel>
-                <input type="text" value={details.transport.transportProvider} onChange={(e) => updateTransport({ transportProvider: e.target.value })} placeholder="Optional" disabled={disabled} className={inputClass} />
+                <input aria-label="Transport provider" type="text" value={details.transport.transportProvider} onChange={(e) => updateTransport({ transportProvider: e.target.value })} placeholder="Optional" disabled={disabled} className={inputClass} />
               </div>
 
               <div>
                 <FieldLabel>Pickup Date</FieldLabel>
                 <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
-                  <input type="date" value={details.transport.pickupDate} onChange={(e) => updateTransport({ pickupDate: e.target.value })} disabled={disabled} className={cn(inputClass, 'pl-10')} />
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none z-10" />
+                  <input aria-label="Pickup date" type="date" value={details.transport.pickupDate} onChange={(e) => updateTransport({ pickupDate: e.target.value })} disabled={disabled} className={cn(inputClass, 'pl-10')} />
                 </div>
               </div>
 
               <div>
                 <FieldLabel>Pickup Time</FieldLabel>
                 <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
-                  <input type="time" value={details.transport.pickupTime} onChange={(e) => updateTransport({ pickupTime: e.target.value })} disabled={disabled} className={cn(inputClass, 'pl-10')} />
+                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none z-10" />
+                  <input aria-label="Pickup time" type="time" value={details.transport.pickupTime} onChange={(e) => updateTransport({ pickupTime: e.target.value })} disabled={disabled} className={cn(inputClass, 'pl-10')} />
                 </div>
               </div>
 
               <div className="md:col-span-2">
                 <FieldLabel>Internal Notes</FieldLabel>
-                <textarea value={details.transport.internalNotes} onChange={(e) => updateTransport({ internalNotes: e.target.value })} placeholder="Optional transport notes" disabled={disabled} rows={2} className={cn(inputClass, 'resize-none')} />
+                <textarea value={details.transport.internalNotes} onChange={(e) => updateTransport({ internalNotes: e.target.value })} aria-label="Transport internal notes" placeholder="Optional transport notes" disabled={disabled} rows={2} className={cn(inputClass, 'resize-none')} />
               </div>
 
               <div className="md:col-span-2">
-                <button type="button" onClick={() => { setShowCustomRoute(true); updateTransport({ isCustomRoute: true, routeId: null, routeName: '', referencePrice: null }); }} disabled={disabled} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors">
+                <button type="button" onClick={() => { setShowCustomRoute(true); updateTransport({ isCustomRoute: true, routeId: null, routeName: '', referencePrice: null }); }} disabled={disabled} className="inline-flex min-h-[44px] items-center gap-1 rounded text-xs font-medium text-brand-600 transition-colors hover:text-brand-700 sm:min-h-0">
                   <Plus className="h-3 w-3" /> Route not listed? Enter a custom route
                 </button>
               </div>
@@ -665,7 +666,7 @@ export function CaseDetailsCard({
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-50 text-brand-700">
               <span className="text-xs font-bold">C</span>
             </div>
-            <h4 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Hotels</h4>
+            <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Hotels</h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Makkah Hotel */}
@@ -686,7 +687,7 @@ export function CaseDetailsCard({
                     error={!!errors.makkahHotelId}
                   />
                   {errors.makkahHotelId && <p className="mt-1 text-xs text-red-600">{errors.makkahHotelId}</p>}
-                  <button type="button" onClick={() => setShowCustomMakkah(true)} disabled={disabled} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors">
+                  <button type="button" onClick={() => setShowCustomMakkah(true)} disabled={disabled} className="mt-1.5 inline-flex min-h-[44px] items-center gap-1 rounded text-xs font-medium text-brand-600 transition-colors hover:text-brand-700 sm:min-h-0">
                     <Plus className="h-3 w-3" /> Hotel not found? Enter hotel manually
                   </button>
                 </>
@@ -714,7 +715,7 @@ export function CaseDetailsCard({
                     <FieldLabel>Internal Note</FieldLabel>
                     <input type="text" value={details.makkahCustomHotel?.internalNote || ''} onChange={(e) => handleCustomMakkahChange('internalNote', e.target.value)} placeholder="Optional" disabled={disabled} className={inputClass} />
                   </div>
-                  <p className="text-xs text-slate-400">City: Makkah (fixed)</p>
+                  <p className="text-xs text-slate-500">City: Makkah (fixed)</p>
                 </div>
               )}
             </div>
@@ -737,7 +738,7 @@ export function CaseDetailsCard({
                     error={!!errors.madinahHotelId}
                   />
                   {errors.madinahHotelId && <p className="mt-1 text-xs text-red-600">{errors.madinahHotelId}</p>}
-                  <button type="button" onClick={() => setShowCustomMadinah(true)} disabled={disabled} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors">
+                  <button type="button" onClick={() => setShowCustomMadinah(true)} disabled={disabled} className="mt-1.5 inline-flex min-h-[44px] items-center gap-1 rounded text-xs font-medium text-brand-600 transition-colors hover:text-brand-700 sm:min-h-0">
                     <Plus className="h-3 w-3" /> Hotel not found? Enter hotel manually
                   </button>
                 </>
@@ -765,7 +766,7 @@ export function CaseDetailsCard({
                     <FieldLabel>Internal Note</FieldLabel>
                     <input type="text" value={details.madinahCustomHotel?.internalNote || ''} onChange={(e) => handleCustomMadinahChange('internalNote', e.target.value)} placeholder="Optional" disabled={disabled} className={inputClass} />
                   </div>
-                  <p className="text-xs text-slate-400">City: Madinah (fixed)</p>
+                  <p className="text-xs text-slate-500">City: Madinah (fixed)</p>
                 </div>
               )}
             </div>
@@ -778,24 +779,24 @@ export function CaseDetailsCard({
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-50 text-brand-700">
               <span className="text-xs font-bold">D</span>
             </div>
-            <h4 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Planned Dates</h4>
+            <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Planned Dates</h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <FieldLabel>Planned Outbound Date</FieldLabel>
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
-                <input type="date" value={details.plannedOutboundDate} onChange={handleDateChange('plannedOutboundDate')} disabled={disabled} className={cn(inputClass, 'pl-10')} />
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none z-10" />
+                <input aria-label="Planned outbound date" type="date" value={details.plannedOutboundDate} onChange={handleDateChange('plannedOutboundDate')} disabled={disabled} className={cn(inputClass, 'pl-10')} />
               </div>
-              <p className="mt-1 text-xs text-slate-400">Planned date only — does not confirm actual arrival</p>
+              <p className="mt-1 text-xs text-slate-500">Planned date only — does not confirm actual arrival</p>
             </div>
             <div>
               <FieldLabel>Expected Return Date</FieldLabel>
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
-                <input type="date" value={details.expectedReturnDate} onChange={handleDateChange('expectedReturnDate')} disabled={disabled} className={cn(inputClass, 'pl-10')} />
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none z-10" />
+                <input aria-label="Expected return date" type="date" value={details.expectedReturnDate} onChange={handleDateChange('expectedReturnDate')} disabled={disabled} className={cn(inputClass, 'pl-10')} />
               </div>
-              <p className="mt-1 text-xs text-slate-400">Planned date only — does not confirm actual departure</p>
+              <p className="mt-1 text-xs text-slate-500">Planned date only — does not confirm actual departure</p>
             </div>
           </div>
           {(dateError || errors.dateError) && (

@@ -134,7 +134,7 @@ export function SearchableCombobox({
           open && !disabled && error && 'border-red-400 ring-2 ring-red-100',
         )}
       >
-        <Icon className={cn('h-4 w-4 shrink-0', error ? 'text-red-400' : 'text-slate-400')} />
+        <Icon className={cn('h-4 w-4 shrink-0', error ? 'text-red-400' : 'text-slate-500')} />
         {open ? (
           <input
             ref={inputRef}
@@ -151,7 +151,7 @@ export function SearchableCombobox({
           <span
             className={cn(
               'flex-1 min-w-0 text-sm truncate',
-              selected ? 'text-slate-900 font-medium' : 'text-slate-400',
+              selected ? 'text-slate-900 font-medium' : 'text-slate-500',
             )}
           >
             {selected ? selected.label : placeholder}
@@ -161,7 +161,7 @@ export function SearchableCombobox({
           <button
             type="button"
             onClick={handleClear}
-            className="text-slate-400 hover:text-slate-600 shrink-0"
+            className="text-slate-500 hover:text-slate-600 shrink-0"
             aria-label="Clear selection"
           >
             <X className="h-4 w-4" />
@@ -169,7 +169,7 @@ export function SearchableCombobox({
         )}
         {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-brand-500" />}
         {!loading && !open && (
-          <ChevronDown className={cn('h-4 w-4 shrink-0 text-slate-400 transition-transform')} />
+          <ChevronDown className={cn('h-4 w-4 shrink-0 text-slate-500 transition-transform')} />
         )}
       </div>
 
@@ -180,7 +180,7 @@ export function SearchableCombobox({
               <Loader2 className="h-4 w-4 animate-spin" /> Searching...
             </div>
           ) : options.length === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-slate-400">{emptyMessage}</div>
+            <div className="px-4 py-6 text-center text-sm text-slate-500">{emptyMessage}</div>
           ) : (
             <ul role="listbox" className="py-1">
               {options.map((option, index) => (

@@ -263,7 +263,7 @@ export function ReviewScreen({
                   key={alt.id}
                   className="flex flex-wrap items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
-                  <User className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                  <User className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
                   <span className="font-medium text-slate-900">{alt.full_name}</span>
                   <Identifier value={alt.passport_number} />
                 </li>
@@ -312,11 +312,11 @@ function SummaryRow({
 }) {
   return (
     <div className="flex items-start gap-2.5">
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
       <div className="min-w-0">
         <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
         <dd className="mt-0.5 text-sm text-slate-900">
-          {value || <span className="text-slate-400">Not selected</span>}
+          {value || <span className="text-slate-500">Not selected</span>}
         </dd>
       </div>
     </div>
@@ -539,7 +539,7 @@ function DocumentPreview({ url, name }: { url: string | null; name: string | nul
         </a>
       ) : (
         <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
-          <FileText className="h-6 w-6 text-slate-400" aria-hidden="true" />
+          <FileText className="h-6 w-6 text-slate-500" aria-hidden="true" />
           <p className="text-sm font-medium text-slate-700">{name ?? 'No document preview'}</p>
           <p className="text-xs text-slate-500">
             This document cannot be previewed inline. Open the original file to check each value against it.

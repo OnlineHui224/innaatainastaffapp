@@ -36,7 +36,7 @@ export function PersonalGeminiBanner({ className }: { className?: string }) {
         <Link
           to="/app/account"
           className={cn(
-            'ml-auto inline-flex min-h-[30px] items-center rounded border border-slate-300 bg-white px-2.5 py-1',
+            'ml-auto inline-flex min-h-[44px] items-center rounded border border-slate-300 bg-white px-2.5 py-1 sm:min-h-[30px]',
             'text-xs font-bold text-navy-900 transition-colors hover:bg-slate-50',
           )}
         >

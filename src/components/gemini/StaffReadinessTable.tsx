@@ -1,4 +1,6 @@
 import { cn } from '@/lib/utils';
+import { FlaskConical } from 'lucide-react';
+import { Badge } from '@/components/ui/Badge';
 import { Panel } from '@/components/ui/Panel';
 import { DEMO_STAFF_READINESS } from '@/lib/fixtures/personalGeminiDemo';
 import { readinessDot, readinessTone, type StaffReadiness } from '@/types/personalGemini';
@@ -42,7 +44,21 @@ export function StaffReadinessTable() {
       title="Personal Gemini readiness"
       description="Whether each staff member can use AI-assisted document processing. Connection credentials are not shown, and an administrator cannot use another person's access."
       bodyClassName="p-0"
+      actions={
+        <Badge tone="caution" icon={<FlaskConical className="h-3 w-3 shrink-0" aria-hidden="true" />}>
+          Preview data
+        </Badge>
+      }
     >
+      {/* Personal Gemini is not yet connected to anything. These rows are local
+          demonstration data so the readiness view can be reviewed — they are not
+          live connection records and nothing here was read from or written to
+          the database. */}
+      <p className="border-b border-slate-200 bg-amber-50 px-4 py-2.5 text-xs leading-relaxed text-amber-900">
+        <strong className="font-bold">Demonstration data.</strong> Personal Gemini Access is not yet
+        connected, so no staff member has a real connection to report. These rows are local preview
+        data — they are not live records and are not stored.
+      </p>
       {/* Phone and small tablet: one card per staff member */}
       <ul className="divide-y divide-slate-200 md:hidden">
         {rows.map((row) => (

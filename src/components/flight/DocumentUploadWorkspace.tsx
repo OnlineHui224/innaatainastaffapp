@@ -242,7 +242,7 @@ export function DocumentUploadWorkspace({
             disabled={disabled}
             className="min-h-[44px] rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 hover:text-navy-900 disabled:opacity-40 sm:min-h-[36px]"
           >
-            Load sample documents
+            Load sample documents (demo)
           </button>
         </div>
       )}

@@ -104,6 +104,15 @@ export default function VisaLoggerPage() {
   const [completedSteps, setCompletedSteps] = useState<Set<WorkflowStep>>(new Set());
 
   const [details, setDetails] = useState<VisaCaseDetails>(emptyDetails());
+  /**
+   * Which required fields may display an error yet.
+   *
+   * Validation itself is unchanged — `errors` below is still computed on every
+   * render and still gates progression. This only decides when an officer is
+   * shown a problem: a form they have not touched is not yet wrong.
+   */
+  const [touchedFields, setTouchedFields] = useState<Set<string>>(new Set());
+  const [attemptedContinue, setAttemptedContinue] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [extraction, setExtraction] = useState<VisaExtractionResult>(emptyExtraction());
@@ -249,11 +258,36 @@ export default function VisaLoggerPage() {
   }
 
   const caseDetailsValid = Object.keys(errors).length === 0;
+
+  /**
+   * The subset of `errors` the officer is actually shown.
+   *
+   * Nothing is relaxed: `errors`, `caseDetailsValid`, `missingFields` and every
+   * save condition still see the full set. A field only surfaces its message
+   * once it has been touched, or once a progression has been attempted — at
+   * which point every blocking field is revealed at once.
+   */
+  const DATE_KEYS = ['plannedOutboundDate', 'expectedReturnDate'];
+  const visibleErrors: Record<string, string> = attemptedContinue
+    ? errors
+    : Object.fromEntries(
+        Object.entries(errors).filter(([key]) =>
+          key === 'dateError'
+            ? DATE_KEYS.some((dateKey) => touchedFields.has(dateKey))
+            : touchedFields.has(key),
+        ),
+      );
   const isReady = caseDetailsValid && !!file;
   const verifiedCount = countVerified(extraction);
   const reviewComplete = allRequiredVerified(extraction);
 
   const handleDetailsChange = useCallback((updates: Partial<VisaCaseDetails>) => {
+    // Any field the officer has actually interacted with may show its own error.
+    setTouchedFields((prev) => {
+      const next = new Set(prev);
+      Object.keys(updates).forEach((key) => next.add(key));
+      return next;
+    });
     setDetails((prev) => ({ ...prev, ...updates }));
   }, []);
 
@@ -780,14 +814,20 @@ export default function VisaLoggerPage() {
                   onPilgrimSearch={handlePilgrimSearch}
                   agentOptions={agentOptions}
                   staffOptions={staffOptions}
-                  errors={errors}
+                  errors={visibleErrors}
                   disabled={false}
                   isAdmin={isAdminOrHigher}
                 />
                 <div className="flex justify-end">
+                  {/* Deliberately enabled. `goToUpload` still refuses to advance
+                      while anything is missing — pressing it is how an officer
+                      asks what is outstanding, rather than facing a dead control
+                      with no explanation. */}
                   <Button
-                    onClick={goToUpload}
-                    disabled={!caseDetailsValid}
+                    onClick={() => {
+                      setAttemptedContinue(true);
+                      goToUpload();
+                    }}
                     icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
                   >
                     Continue to upload

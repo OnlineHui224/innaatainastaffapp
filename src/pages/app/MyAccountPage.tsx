@@ -109,7 +109,10 @@ export default function MyAccountPage() {
           <PersonalGeminiPanel />
 
           <p className="mt-2.5 text-xs text-slate-500">
-            Currently previewing the <strong className="font-semibold text-slate-700">{GEMINI_STATUS[state].label}</strong> state.
+            Currently previewing the{' '}
+            <strong className="font-semibold text-slate-700">{GEMINI_STATUS[state].label}</strong>{' '}
+            state. Preview state is local to this browser session, is not stored against your
+            account, and is not a real connection.
           </p>
         </section>
       </div>

@@ -92,9 +92,15 @@ export default function FlightDocumentOpsPage() {
   const [sectorCount] = useState(4);
 
   const [stage, setStage] = useState<FlightStage>('upload');
-  const [documents, setDocuments] = useState<SourceDocument[]>(() =>
-    SAMPLE_DOCUMENTS.slice(0, 2).map((doc) => ({ ...doc })),
-  );
+  /**
+   * An operational session starts empty.
+   *
+   * Staff upload their own travel documents; the workspace must never open
+   * pre-populated, which would suggest work already exists on this record. The
+   * sample set stays available behind an explicit, clearly-labelled action for
+   * design review and testing.
+   */
+  const [documents, setDocuments] = useState<SourceDocument[]>([]);
   const [uploadError, setUploadError] = useState(false);
 
   const [procStep, setProcStep] = useState(0);
@@ -343,7 +349,7 @@ export default function FlightDocumentOpsPage() {
 
   const startOver = useCallback(() => {
     setStage('upload');
-    setDocuments(SAMPLE_DOCUMENTS.slice(0, 2).map((doc) => ({ ...doc })));
+    setDocuments([]);
     setSectors([]);
     setSummary(null);
     setReviewed({});

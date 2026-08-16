@@ -16,7 +16,7 @@ Supabase dashboard → **Edge Functions → Secrets** (or the CLI shown below).
 | Secret | Value | Required |
 |---|---|---|
 | `GEMINI_API_KEY` | The company Gemini API key | **Yes** — the function returns `not_configured` without it |
-| `GEMINI_MODEL` | `gemini-3.6-flash` | No — this is already the built-in default |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | No — this is already the built-in default |
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected by the platform. Do
 not set them by hand.
@@ -28,9 +28,19 @@ supabase secrets set GEMINI_API_KEY=...      # paste the real key at your termin
 ```
 
 `GEMINI_MODEL` only needs setting if you want something other than
-`gemini-3.6-flash`. Keep it a pinned stable model ID — never a `-preview`,
+`gemini-2.5-flash`.
+
+**Why 2.5 Flash:** parity with the existing OPS PRO extractor, which already
+reads these documents in production on this model, through the same REST
+endpoint and the same `x-goog-api-key` header. Matching it for the first HajjERP
+deployment means that if extraction misbehaves, it is a migration problem and
+not a model change — the two are not being varied at once.
+
+Newer models can be trialled later by setting `GEMINI_MODEL` alone, with no code
+change. Keep whatever you set a pinned stable model ID — never a `-preview`,
 `-exp` or moving `-latest` alias, so an extraction prompt validated against one
-model cannot silently change under a system handling passport data.
+model cannot silently change under a system handling passport data. The browser
+never chooses the model; only this secret does.
 
 ## 2. Deploy
 

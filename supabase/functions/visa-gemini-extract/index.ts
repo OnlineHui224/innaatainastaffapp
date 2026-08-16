@@ -69,7 +69,14 @@ const GEMINI_TIMEOUT_MS = 45_000;
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const geminiApiKey = Deno.env.get("GEMINI_API_KEY") ?? "";
-const geminiModel = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.6-flash";
+/**
+ * Default chosen for parity with the existing OPS PRO extractor, which already
+ * reads these documents in production on this model. The first HajjERP
+ * deployment matches it, so a migration problem cannot be confused with a model
+ * change. `GEMINI_MODEL` stays configurable server-side for testing newer models
+ * later — the browser never chooses.
+ */
+const geminiModel = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
 
 const adminClient = createClient(supabaseUrl, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },

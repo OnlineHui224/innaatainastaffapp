@@ -1,16 +1,13 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import {
-  Search, MapPin, Calendar, Building2, User, Hotel,
-  Package, Plus, AlertCircle, Loader2, Bus, Calculator,
-  DollarSign, Clock, ShieldAlert,
-} from 'lucide-react';
+import { AlertCircle, Building2, Calendar, CheckCircle2, Hotel, Loader2, Plus, User } from 'lucide-react';
 import { SearchableCombobox } from './SearchableCombobox';
+import { TransportPackageField } from './TransportPackageField';
 import { useHotelSearch } from '@/hooks/useHotelSearch';
-import { useTransportData } from '@/hooks/useTransportData';
 import { cn } from '@/lib/utils';
 import type {
-  VisaCaseDetails, TransportSelection, NewAgentEntry, CustomHotelEntry,
+  TransportPackage,
+  VisaCaseDetails, NewAgentEntry, CustomHotelEntry,
 } from '@/types/visa';
 import { normalizeAgentName } from '@/types/visa';
 import type { ComboboxOption } from './SearchableCombobox';
@@ -19,9 +16,6 @@ import type { SubAgent } from '@/types';
 interface CaseDetailsCardProps {
   details: VisaCaseDetails;
   onChange: (updates: Partial<VisaCaseDetails>) => void;
-  pilgrimOptions: ComboboxOption[];
-  pilgrimLoading: boolean;
-  onPilgrimSearch: (query: string) => void;
   agentOptions: ComboboxOption[];
   staffOptions: ComboboxOption[];
   errors: Record<string, string>;
@@ -43,9 +37,6 @@ const inputClass = 'w-full min-h-[44px] rounded-md border border-slate-300 bg-wh
 export function CaseDetailsCard({
   details,
   onChange,
-  pilgrimOptions,
-  pilgrimLoading,
-  onPilgrimSearch,
   agentOptions,
   staffOptions,
   errors,
@@ -54,15 +45,12 @@ export function CaseDetailsCard({
 }: CaseDetailsCardProps) {
   const makkahSearch = useHotelSearch('Makkah');
   const madinahSearch = useHotelSearch('Madinah');
-  const { routes, vehicleTypes, loading: transportLoading, getRate } = useTransportData();
 
   const [showNewAgent, setShowNewAgent] = useState(false);
   const [agentDuplicates, setAgentDuplicates] = useState<SubAgent[]>([]);
   const [agentChecking, setAgentChecking] = useState(false);
   const [showCustomMakkah, setShowCustomMakkah] = useState(false);
   const [showCustomMadinah, setShowCustomMadinah] = useState(false);
-  const [showCustomRoute, setShowCustomRoute] = useState(false);
-  const [rateLoading, setRateLoading] = useState(false);
 
   // ── Hotel options ──
   const makkahHotelOptions: ComboboxOption[] = makkahSearch.results.map((h) => ({
@@ -79,29 +67,9 @@ export function CaseDetailsCard({
     tertiary: `${h.classification || ''} ${h.licence_number ? `Lic: ${h.licence_number}` : ''}`.trim(),
   }));
 
-  const routeOptions: ComboboxOption[] = routes.map((r) => ({
-    value: r.id,
-    label: r.route_name,
-    secondary: r.route_code,
-  }));
 
-  const vehicleOptions: ComboboxOption[] = vehicleTypes.map((v) => ({
-    value: v.id,
-    label: v.vehicle_name,
-  }));
 
   // ── Handlers ──
-  const handlePilgrimSelect = useCallback(
-    (value: string | null) => {
-      const selected = pilgrimOptions.find((o) => o.value === value);
-      onChange({
-        pilgrimId: value,
-        pilgrimName: selected?.label || '',
-        passportNumber: selected?.secondary || details.passportNumber,
-      });
-    },
-    [pilgrimOptions, onChange, details.passportNumber],
-  );
 
   // Agent selection
   const handleAgentSelect = useCallback(
@@ -222,68 +190,9 @@ export function CaseDetailsCard({
   );
 
   // Transport handlers
-  const updateTransport = useCallback(
-    (updates: Partial<TransportSelection>) => {
-      const current = details.transport;
-      const next = { ...current, ...updates };
-      // Recalculate total
-      const effectivePrice = next.hasPriceOverride && next.agreedPrice != null ? next.agreedPrice : next.referencePrice;
-      next.calculatedTotal = effectivePrice != null ? effectivePrice * next.numberOfVehicles : null;
-      onChange({ transport: next });
-    },
-    [details.transport, onChange],
-  );
 
-  const handleRouteSelect = useCallback(
-    async (value: string | null) => {
-      const selected = routeOptions.find((o) => o.value === value);
-      updateTransport({ routeId: value, routeName: selected?.label || '', isCustomRoute: false });
 
-      // If vehicle already selected, fetch rate
-      if (value && details.transport.vehicleTypeId) {
-        setRateLoading(true);
-        const rate = await getRate(value, details.transport.vehicleTypeId);
-        updateTransport({
-          referencePrice: rate?.price ?? null,
-          hasPriceOverride: false,
-          agreedPrice: null,
-        });
-        setRateLoading(false);
-      } else {
-        updateTransport({ referencePrice: null });
-      }
-    },
-    [routeOptions, details.transport.vehicleTypeId, getRate, updateTransport],
-  );
 
-  const handleVehicleSelect = useCallback(
-    async (value: string | null) => {
-      const selected = vehicleOptions.find((o) => o.value === value);
-      updateTransport({ vehicleTypeId: value, vehicleTypeName: selected?.label || '' });
-
-      if (value && details.transport.routeId && !details.transport.isCustomRoute) {
-        setRateLoading(true);
-        const rate = await getRate(details.transport.routeId, value);
-        updateTransport({
-          referencePrice: rate?.price ?? null,
-          hasPriceOverride: false,
-          agreedPrice: null,
-        });
-        setRateLoading(false);
-      } else {
-        updateTransport({ referencePrice: null });
-      }
-    },
-    [vehicleOptions, details.transport.routeId, details.transport.isCustomRoute, getRate, updateTransport],
-  );
-
-  const handleNumVehiclesChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const n = Math.max(1, parseInt(e.target.value, 10) || 1);
-      updateTransport({ numberOfVehicles: n });
-    },
-    [updateTransport],
-  );
 
   const handleDateChange = useCallback(
     (field: 'plannedOutboundDate' | 'expectedReturnDate') => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -297,9 +206,6 @@ export function CaseDetailsCard({
     ? 'Expected return date must be on or after the planned outbound date'
     : null;
 
-  const effectivePrice = details.transport.hasPriceOverride && details.transport.agreedPrice != null
-    ? details.transport.agreedPrice
-    : details.transport.referencePrice;
 
   return (
     <div className="rounded-lg border border-slate-300 bg-white">
@@ -323,24 +229,9 @@ export function CaseDetailsCard({
             <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Responsibility</h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2">
-              <FieldLabel>Existing Pilgrim</FieldLabel>
-              <SearchableCombobox
-                options={pilgrimOptions}
-                value={details.pilgrimId}
-                onChange={handlePilgrimSelect}
-                onSearchChange={onPilgrimSearch}
-                loading={pilgrimLoading}
-                placeholder="Search by passenger name, passport number, or agent"
-                emptyMessage="No pilgrims found"
-                icon={Search}
-                disabled={disabled}
-                error={!!errors.pilgrimId}
-              />
-              {errors.pilgrimId && <p className="mt-1 text-xs text-red-600">{errors.pilgrimId}</p>}
-              <p className="mt-1 text-xs text-slate-500">Search by passenger name, passport number, or agent name</p>
-            </div>
-
+            {/* An Existing Pilgrim is deliberately NOT selected here.
+                The visa identity is extracted or entered first, reviewed, and
+                only then matched to a HajjERP pilgrim by passport number. */}
             {/* Responsible Agent — with manual entry */}
             <div className="md:col-span-2">
               <FieldLabel>Responsible Agent</FieldLabel>
@@ -429,7 +320,7 @@ export function CaseDetailsCard({
                   )}
                   {!agentChecking && details.newAgent?.organisationName && agentDuplicates.length === 0 && (
                     <div className="flex items-center gap-1.5 text-xs text-emerald-700">
-                      <ShieldAlert className="h-3.5 w-3.5" /> No duplicates found — safe to proceed.
+                      <CheckCircle2 className="h-3.5 w-3.5" /> No duplicates found — safe to proceed.
                     </div>
                   )}
 
@@ -463,201 +354,25 @@ export function CaseDetailsCard({
           </div>
         </section>
 
-        {/* ── Section B — Ground Transportation ── */}
+        {/* ── Section B — Transportation ──
+            Business-level entitlement only. Route, vehicle, pricing, provider,
+            pickup and approval are transport CONTRACT concerns and belong to the
+            future Ground Transport Contracts module; the richer
+            `TransportSelection` model and its reference tables are untouched. */}
         <section>
           <div className="flex items-center gap-2 mb-4">
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-50 text-brand-700">
               <span className="text-xs font-bold">B</span>
             </div>
-            <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Ground Transportation</h3>
+            <h3 className="text-sm font-semibold text-navy-900 uppercase tracking-wide">Transportation</h3>
+            <span className="text-xs text-slate-500">What the traveller is entitled to</span>
           </div>
-
-          {transportLoading ? (
-            <div className="flex items-center justify-center py-6 text-sm text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading transport routes...
-            </div>
-          ) : !showCustomRoute ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <FieldLabel>Transport Route</FieldLabel>
-                <SearchableCombobox
-                  options={routeOptions}
-                  value={details.transport.routeId}
-                  onChange={handleRouteSelect}
-                  placeholder="Select a route"
-                  emptyMessage="No routes found"
-                  icon={Bus}
-                  disabled={disabled}
-                />
-              </div>
-
-              <div>
-                <FieldLabel>Vehicle Type</FieldLabel>
-                <SearchableCombobox
-                  options={vehicleOptions}
-                  value={details.transport.vehicleTypeId}
-                  onChange={handleVehicleSelect}
-                  placeholder="Select vehicle type"
-                  emptyMessage="No vehicles found"
-                  icon={Package}
-                  disabled={disabled}
-                />
-              </div>
-
-              {/* Reference price + override */}
-              <div className="md:col-span-2">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md bg-slate-50 border border-slate-200 p-4">
-                  <div>
-                    <p className="text-xs text-slate-500 font-medium mb-0.5">Reference Price</p>
-                    <div className="flex items-center gap-1.5">
-                      <DollarSign className="h-4 w-4 text-slate-500" />
-                      {rateLoading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />
-                      ) : details.transport.referencePrice != null ? (
-                        <span className="text-sm font-bold text-slate-800">SAR {details.transport.referencePrice.toFixed(2)}</span>
-                      ) : (
-                        <span className="text-sm text-slate-500">Select route & vehicle</span>
-                      )}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-500 font-medium mb-0.5">Number of Vehicles</p>
-                    <input
-                      aria-label="Number of vehicles"
-                      type="number"
-                      min={1}
-                      value={details.transport.numberOfVehicles}
-                      onChange={handleNumVehiclesChange}
-                      disabled={disabled}
-                      className="w-20 min-h-[44px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 transition-colors focus:border-brand-600 disabled:bg-slate-50 sm:min-h-0"
-                    />
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-500 font-medium mb-0.5">Calculated Total</p>
-                    <div className="flex items-center gap-1.5">
-                      <Calculator className="h-4 w-4 text-brand-500" />
-                      {effectivePrice != null ? (
-                        <span className="text-sm font-bold text-brand-700">SAR {(effectivePrice * details.transport.numberOfVehicles).toFixed(2)}</span>
-                      ) : (
-                        <span className="text-sm text-slate-500">—</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Price override (admin only) */}
-              {isAdmin && details.transport.referencePrice != null && (
-                <div className="md:col-span-2">
-                  <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={details.transport.hasPriceOverride}
-                      onChange={(e) => updateTransport({ hasPriceOverride: e.target.checked, agreedPrice: e.target.checked ? details.transport.agreedPrice : null })}
-                      disabled={disabled}
-                      className="rounded border-slate-300 text-brand-500 focus:ring-brand-200"
-                    />
-                    Override reference rate for this booking
-                  </label>
-                  {details.transport.hasPriceOverride && (
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md border border-amber-200 bg-amber-50/40 p-3">
-                      <div>
-                        <FieldLabel required>New Agreed Price (SAR)</FieldLabel>
-                        <input type="number" min={0} step="0.01" value={details.transport.agreedPrice ?? ''} onChange={(e) => updateTransport({ agreedPrice: parseFloat(e.target.value) || 0 })} disabled={disabled} className={inputClass} />
-                      </div>
-                      <div>
-                        <FieldLabel required>Reason</FieldLabel>
-                        <input type="text" value={details.transport.overrideReason} onChange={(e) => updateTransport({ overrideReason: e.target.value })} placeholder="Reason for override" disabled={disabled} className={inputClass} />
-                      </div>
-                      <div>
-                        <FieldLabel required>Approving Staff</FieldLabel>
-                        <SearchableCombobox
-                          options={staffOptions}
-                          value={details.transport.overrideApproverId}
-                          onChange={(v) => {
-                            const s = staffOptions.find((o) => o.value === v);
-                            updateTransport({ overrideApproverId: v, overrideApproverName: s?.label || '' });
-                          }}
-                          placeholder="Select approver"
-                          emptyMessage="No staff found"
-                          icon={User}
-                          disabled={disabled}
-                        />
-                      </div>
-                      <div className="sm:col-span-3 flex items-center gap-4 text-xs">
-                        <span className="text-slate-500">Reference: <span className="font-semibold text-slate-700">SAR {details.transport.referencePrice?.toFixed(2)}</span></span>
-                        <span className="text-amber-700">Agreed: <span className="font-semibold">SAR {details.transport.agreedPrice?.toFixed(2)}</span></span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <FieldLabel>Transport Provider</FieldLabel>
-                <input aria-label="Transport provider" type="text" value={details.transport.transportProvider} onChange={(e) => updateTransport({ transportProvider: e.target.value })} placeholder="Optional" disabled={disabled} className={inputClass} />
-              </div>
-
-              <div>
-                <FieldLabel>Pickup Date</FieldLabel>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none z-10" />
-                  <input aria-label="Pickup date" type="date" value={details.transport.pickupDate} onChange={(e) => updateTransport({ pickupDate: e.target.value })} disabled={disabled} className={cn(inputClass, 'pl-10')} />
-                </div>
-              </div>
-
-              <div>
-                <FieldLabel>Pickup Time</FieldLabel>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none z-10" />
-                  <input aria-label="Pickup time" type="time" value={details.transport.pickupTime} onChange={(e) => updateTransport({ pickupTime: e.target.value })} disabled={disabled} className={cn(inputClass, 'pl-10')} />
-                </div>
-              </div>
-
-              <div className="md:col-span-2">
-                <FieldLabel>Internal Notes</FieldLabel>
-                <textarea value={details.transport.internalNotes} onChange={(e) => updateTransport({ internalNotes: e.target.value })} aria-label="Transport internal notes" placeholder="Optional transport notes" disabled={disabled} rows={2} className={cn(inputClass, 'resize-none')} />
-              </div>
-
-              <div className="md:col-span-2">
-                <button type="button" onClick={() => { setShowCustomRoute(true); updateTransport({ isCustomRoute: true, routeId: null, routeName: '', referencePrice: null }); }} disabled={disabled} className="inline-flex min-h-[44px] items-center gap-1 rounded text-xs font-medium text-brand-600 transition-colors hover:text-brand-700 sm:min-h-0">
-                  <Plus className="h-3 w-3" /> Route not listed? Enter a custom route
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3 rounded-md border border-brand-200 bg-brand-50/40 p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-brand-700">Custom Route (CUSTOM_ROUTE)</span>
-                <button type="button" onClick={() => { setShowCustomRoute(false); updateTransport({ isCustomRoute: false, customOrigin: '', customDestination: '', routeName: '' }); }} className="text-xs text-slate-500 hover:text-slate-700">Cancel</button>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <FieldLabel required>Origin</FieldLabel>
-                  <input type="text" value={details.transport.customOrigin} onChange={(e) => updateTransport({ customOrigin: e.target.value, routeName: `${e.target.value} → ${details.transport.customDestination || '...'}` })} placeholder="Pickup location" disabled={disabled} className={inputClass} />
-                </div>
-                <div>
-                  <FieldLabel required>Destination</FieldLabel>
-                  <input type="text" value={details.transport.customDestination} onChange={(e) => updateTransport({ customDestination: e.target.value, routeName: `${details.transport.customOrigin || '...'} → ${e.target.value}` })} placeholder="Drop-off location" disabled={disabled} className={inputClass} />
-                </div>
-                <div>
-                  <FieldLabel>Vehicle Type</FieldLabel>
-                  <SearchableCombobox options={vehicleOptions} value={details.transport.vehicleTypeId} onChange={handleVehicleSelect} placeholder="Select vehicle type" emptyMessage="No vehicles found" icon={Package} disabled={disabled} />
-                </div>
-                <div>
-                  <FieldLabel required>Agreed Price (SAR)</FieldLabel>
-                  <input type="number" min={0} step="0.01" value={details.transport.agreedPrice ?? ''} onChange={(e) => updateTransport({ agreedPrice: parseFloat(e.target.value) || 0, referencePrice: parseFloat(e.target.value) || 0 })} placeholder="Agreed price" disabled={disabled} className={inputClass} />
-                </div>
-                <div className="sm:col-span-2">
-                  <FieldLabel>Notes</FieldLabel>
-                  <input type="text" value={details.transport.internalNotes} onChange={(e) => updateTransport({ internalNotes: e.target.value })} placeholder="Optional notes" disabled={disabled} className={inputClass} />
-                </div>
-              </div>
-              <div className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
-                Custom routes are marked CUSTOM_ROUTE and will not be added to the permanent price list. An administrator may promote them later.
-              </div>
-            </div>
-          )}
+          <TransportPackageField
+            value={details.transportPackage}
+            onChange={(transportPackage: TransportPackage) => onChange({ transportPackage })}
+            error={errors.transportPackage}
+            disabled={disabled}
+          />
         </section>
 
         {/* ── Section C — Hotels ── */}
@@ -801,7 +516,7 @@ export function CaseDetailsCard({
           </div>
           {(dateError || errors.dateError) && (
             <div className="mt-3 flex items-center gap-2 text-xs text-red-600">
-              <MapPin className="h-3.5 w-3.5 shrink-0" />
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
               {dateError || errors.dateError}
             </div>
           )}

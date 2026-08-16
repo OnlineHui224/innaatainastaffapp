@@ -1,43 +1,34 @@
 import { useState } from 'react';
 import {
   AlertCircle,
-  AlertTriangle,
   Bookmark,
   Bus,
-  CheckCircle2,
   FileText,
   Flag,
   Hotel,
-  Lock,
   PenLine,
   ShieldCheck,
   User,
   Users,
-  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/priority';
-import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Identifier, Input } from '@/components/ui/Field';
+import { Input } from '@/components/ui/Field';
 import { Panel } from '@/components/ui/Panel';
-import { TransportSummary } from './TransportSummary';
 import { BlockStateBadge } from '@/components/ReviewStateBadge';
 import type { BlockState } from '@/types/flightOps';
 import type {
   ExtractedField,
   ExtractedFieldKey,
-  MatchStatus,
-  PilgrimMatchResult,
   VisaCaseDetails,
   VisaExtractionResult,
 } from '@/types/visa';
-import { MATCH_STATUS_LABELS } from '@/types/visa';
+import { transportPackageSummary } from '@/types/visa';
 
 interface ReviewScreenProps {
   extraction: VisaExtractionResult;
-  match: PilgrimMatchResult;
   details: VisaCaseDetails;
   /** Officer edit — clears any existing verification for that field. */
   onFieldEdit: (key: ExtractedFieldKey, value: string) => void;
@@ -97,38 +88,10 @@ export function allRequiredVerified(extraction: VisaExtractionResult): boolean {
   return countVerified(extraction) === REQUIRED_VERIFICATION_KEYS.length;
 }
 
-function matchStyle(status: MatchStatus) {
-  switch (status) {
-    case 'exact_passport_match':
-      return { tone: 'positive' as const, Icon: CheckCircle2, wrap: 'border-emerald-400 bg-emerald-50' };
-    case 'possible_name_match':
-    case 'multiple_matches':
-      return { tone: 'caution' as const, Icon: AlertTriangle, wrap: 'border-amber-500 bg-amber-50' };
-    case 'no_match':
-      return { tone: 'neutral' as const, Icon: Users, wrap: 'border-slate-400 bg-slate-50' };
-    default:
-      return { tone: 'critical' as const, Icon: XCircle, wrap: 'border-red-400 bg-red-50' };
-  }
-}
 
-const MATCH_GUIDANCE: Record<MatchStatus, string> = {
-  exact_passport_match:
-    'The passport number on this document matches exactly one pilgrim record. This is a direct identity match.',
-  possible_name_match:
-    'Not a match until verified. Names alone are not identity — confirm the passport number against the document before proceeding.',
-  no_match:
-    'No pilgrim on the platform matches this document. A visa can only be logged against an existing pilgrim record.',
-  passport_mismatch:
-    'The passport number on this document conflicts with the passport held on the selected pilgrim record. This must be resolved before saving.',
-  duplicate_visa:
-    'This visa number is already recorded against a pilgrim. Saving again would create a duplicate visa record.',
-  multiple_matches:
-    'Not a match until verified. More than one pilgrim record could correspond to this document — identify the correct one before proceeding.',
-};
 
 export function ReviewScreen({
   extraction,
-  match,
   details,
   onFieldEdit,
   onFieldVerify,
@@ -136,8 +99,6 @@ export function ReviewScreen({
   documentPreviewUrl,
   documentName,
 }: ReviewScreenProps) {
-  const style = matchStyle(match.status);
-  const MatchIcon = style.Icon;
   const verifiedCount = countVerified(extraction);
   const total = REQUIRED_VERIFICATION_KEYS.length;
 
@@ -190,88 +151,9 @@ export function ReviewScreen({
         </div>
       </Panel>
 
-      {/* Matching */}
-      <Panel
-        title="HajjERP match"
-        description="How this document relates to the pilgrim records already on the platform."
-      >
-        <div className={cn('flex items-start gap-3 rounded-md border p-4', style.wrap)}>
-          <MatchIcon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-          <div className="min-w-0">
-            <p className="font-display text-sm font-bold text-navy-900">
-              {MATCH_STATUS_LABELS[match.status]}
-            </p>
-            <p className="mt-1 text-sm leading-relaxed text-slate-700">{MATCH_GUIDANCE[match.status]}</p>
-            {(match.status === 'possible_name_match' || match.status === 'multiple_matches') && (
-              <p className="mt-2 inline-flex items-center gap-1.5 rounded border border-amber-600 bg-white px-2 py-1 text-2xs font-bold uppercase tracking-wide text-amber-900">
-                <Lock className="h-3 w-3" aria-hidden="true" />
-                Not a match until verified
-              </p>
-            )}
-          </div>
-        </div>
-
-        {match.pilgrim && (
-          <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 rounded-md border border-slate-300 bg-slate-50 p-4 sm:grid-cols-2">
-            <div>
-              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Existing pilgrim</dt>
-              <dd className="mt-0.5 text-sm font-medium text-slate-900">{match.pilgrim.full_name}</dd>
-            </div>
-            <div>
-              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Existing passport</dt>
-              <dd className="mt-0.5 text-sm">
-                <Identifier value={match.pilgrim.passport_number} />
-              </dd>
-            </div>
-            <div>
-              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Existing agent</dt>
-              <dd className="mt-0.5 text-sm text-slate-900">{match.pilgrim.agent_name || 'Unassigned'}</dd>
-            </div>
-            <div>
-              <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                Existing visa number
-              </dt>
-              <dd className="mt-0.5 text-sm">
-                {match.pilgrim.visa_number ? (
-                  <Identifier value={match.pilgrim.visa_number} />
-                ) : (
-                  <span className="text-slate-500">None on file</span>
-                )}
-              </dd>
-            </div>
-          </dl>
-        )}
-
-        {match.conflicts.length > 0 && (
-          <div className="mt-4 space-y-2">
-            {match.conflicts.map((conflict, index) => (
-              <Alert key={index} tone="critical" title="Extraction conflict">
-                {conflict}
-              </Alert>
-            ))}
-          </div>
-        )}
-
-        {match.alternatives.length > 0 && (
-          <div className="mt-4">
-            <p className="mb-2 text-2xs font-bold uppercase tracking-wide text-slate-600">
-              Other possible matches — none of these is accepted automatically
-            </p>
-            <ul className="space-y-1.5">
-              {match.alternatives.map((alt) => (
-                <li
-                  key={alt.id}
-                  className="flex flex-wrap items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                >
-                  <User className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
-                  <span className="font-medium text-slate-900">{alt.full_name}</span>
-                  <Identifier value={alt.passport_number} />
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </Panel>
+      {/* Matching lives in `PilgrimMatchPanel`, rendered by the page after this
+          review. It runs on the reviewed passport number rather than on a
+          pilgrim chosen before the visa was ever read. */}
 
       {/* Operational details confirmation */}
       <Panel
@@ -290,11 +172,15 @@ export function ReviewScreen({
         <div className="mt-5 border-t border-slate-200 pt-4">
           <p className="mb-2 flex items-center gap-2 text-2xs font-bold uppercase tracking-wide text-slate-600">
             <Bus className="h-3.5 w-3.5" aria-hidden="true" />
-            Ground transportation
+            Transportation
           </p>
-          {/* Bound to the current structured transport model — the obsolete
-              single-string "transportation package" field is not used. */}
-          <TransportSummary transport={details.transport} />
+          {/* Business-level entitlement. Route, vehicle, provider and pricing
+              are transport CONTRACT concerns and are not collected here. */}
+          <p className="text-sm text-slate-900">
+            {details.transportPackage
+              ? transportPackageSummary(details.transportPackage)
+              : <span className="text-slate-500">Not selected</span>}
+          </p>
         </div>
       </Panel>
     </div>

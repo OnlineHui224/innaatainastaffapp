@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -24,10 +24,15 @@ import {
   countVerified,
 } from '@/components/visa/ReviewScreen';
 import { SuccessScreen } from '@/components/visa/SuccessScreen';
+import { ConfirmRow, ConfirmSection } from '@/components/visa/ConfirmSection';
+import {
+  PilgrimMatchPanel,
+  type MatchCandidate,
+  type MatchPhase,
+} from '@/components/visa/PilgrimMatchPanel';
 import { ProcessingSummary } from '@/components/visa/ProcessingSummary';
 import { ViewerReadOnly } from '@/components/visa/ViewerReadOnly';
 import { ProvenanceLadder, buildCaseProvenance } from '@/components/visa/ProvenanceLadder';
-import { TransportSummary } from '@/components/visa/TransportSummary';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageHeader } from '@/components/PageHeader';
 import { PersonalGeminiBanner } from '@/components/gemini/PersonalGeminiBanner';
@@ -39,7 +44,6 @@ import type { ComboboxOption } from '@/components/visa/SearchableCombobox';
 import type {
   ExtractedFieldKey,
   ExtractionStatus,
-  MatchStatus,
   PilgrimMatchResult,
   VisaCaseDetails,
   VisaExtractionResult,
@@ -51,6 +55,9 @@ import {
   editFieldValue,
   emptyExtractedField,
   emptyTransportSelection,
+  transportPackageSummary,
+  TRANSPORT_PACKAGE_LABELS,
+  TRANSPORT_PACKAGE_LEGS,
   unverifyField,
   verifyField,
 } from '@/types/visa';
@@ -78,6 +85,7 @@ function emptyDetails(): VisaCaseDetails {
     madinahHotelIsCustom: false,
     madinahCustomHotel: null,
     transport: emptyTransportSelection(),
+    transportPackage: null,
     plannedOutboundDate: '',
     expectedReturnDate: '',
   };
@@ -124,8 +132,11 @@ export default function VisaLoggerPage() {
     alternatives: [],
   });
 
-  const [pilgrimOptions, setPilgrimOptions] = useState<ComboboxOption[]>([]);
-  const [pilgrimLoading, setPilgrimLoading] = useState(false);
+  /* Passport matching, performed only after the identity has been reviewed. */
+  const [matchPhase, setMatchPhase] = useState<MatchPhase>('idle');
+  const [candidates, setCandidates] = useState<MatchCandidate[]>([]);
+  const [matchError, setMatchError] = useState<string | null>(null);
+
   const [agentOptions, setAgentOptions] = useState<ComboboxOption[]>([]);
   const [staffOptions, setStaffOptions] = useState<ComboboxOption[]>([]);
 
@@ -188,52 +199,15 @@ export default function VisaLoggerPage() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  const pilgrimSearchTimer = useMemo(() => ({ current: null as ReturnType<typeof setTimeout> | null }), []);
 
-  const handlePilgrimSearch = useCallback(
-    (query: string) => {
-      if (pilgrimSearchTimer.current) clearTimeout(pilgrimSearchTimer.current);
-      if (!query.trim()) {
-        setPilgrimOptions([]);
-        return;
-      }
-      setPilgrimLoading(true);
-      pilgrimSearchTimer.current = setTimeout(async () => {
-        try {
-          const { data, error } = await supabase
-            .from('pilgrims')
-            .select('id, full_name, passport_number, sub_agents(organisation_name)')
-            .or(`full_name.ilike.%${query.trim()}%,passport_number.ilike.%${query.trim()}%`)
-            .order('full_name')
-            .limit(20);
-          if (error) throw error;
-          setPilgrimOptions(
-            (data || []).map((p: Record<string, unknown>) => ({
-              value: p.id as string,
-              label: p.full_name as string,
-              secondary: p.passport_number as string,
-              tertiary: (p.sub_agents as { organisation_name: string } | null)?.organisation_name ?? '',
-            })),
-          );
-        } catch (e) {
-          console.error('Pilgrim search failed:', e);
-          setPilgrimOptions([]);
-        } finally {
-          setPilgrimLoading(false);
-        }
-      }, 300);
-    },
-    [pilgrimSearchTimer],
-  );
 
   // ── Validation ─────────────────────────────────────────────────────
   const errors: Record<string, string> = {};
   const missingFields: string[] = [];
 
-  if (!details.pilgrimId) {
-    errors.pilgrimId = 'Please select an existing pilgrim';
-    missingFields.push('Existing Pilgrim');
-  }
+  /* An Existing Pilgrim is deliberately NOT required here. The pilgrim is
+     matched later, from the reviewed passport number — see `runPilgrimMatch`.
+     `pilgrimId` remains required before the final save. */
   if (!details.agentName && !details.agentIsProposed) {
     errors.agentId = 'Please select a responsible agent';
     missingFields.push('Responsible Agent');
@@ -241,6 +215,14 @@ export default function VisaLoggerPage() {
   if (details.agentIsProposed && details.newAgent && !details.newAgent.organisationName.trim()) {
     errors.agentId = 'Please enter the new agent name';
     missingFields.push('New Agent Name');
+  }
+  if (!details.visaCompany.trim()) {
+    errors.visaCompany = 'Please enter the visa company';
+    missingFields.push('Visa Company');
+  }
+  if (!details.transportPackage) {
+    errors.transportPackage = 'Please select a transportation package';
+    missingFields.push('Transportation Package');
   }
   if (!details.makkahHotelName) {
     errors.makkahHotelId = 'Please select a Makkah hotel';
@@ -344,76 +326,16 @@ export default function VisaLoggerPage() {
       return;
     }
 
-    setAlert(null);
-    setManualEntry(false);
-
-    for (const stage of EXTRACTION_STAGES) {
-      setExtractionStatus(stage);
-      await new Promise((resolve) => setTimeout(resolve, 700));
-    }
-
-    /* Extracted values start UNVERIFIED. No amount of confidence promotes a value
-       to reviewed — only an officer pressing Verify does that. */
-    const extractedName = details.pilgrimName || '';
-    const extractedPassport = details.passportNumber || '';
-    const extractedVisa = `VISA-${Date.now().toString().slice(-6)}`;
-
-    setExtraction({
-      passengerName: {
-        ...emptyExtractedField(),
-        value: extractedName || null,
-        originalValue: extractedName || null,
-        confidence: 'high',
-        sourcePage: 1,
-      },
-      passportNumber: {
-        ...emptyExtractedField(),
-        value: extractedPassport || null,
-        originalValue: extractedPassport || null,
-        confidence: 'high',
-        sourcePage: 1,
-      },
-      visaNumber: {
-        ...emptyExtractedField(),
-        value: extractedVisa,
-        originalValue: extractedVisa,
-        confidence: 'medium',
-        sourcePage: 1,
-        needsReview: true,
-      },
-      // Nationality is surfaced even when the extractor produced nothing, so it
-      // can never pass through the workflow unseen.
-      nationality: {
-        ...emptyExtractedField(),
-        value: null,
-        originalValue: null,
-        confidence: null,
-        sourcePage: null,
-        needsReview: true,
-      },
-      extractedAt: new Date().toISOString(),
+    /* Real Personal Gemini is not implemented. Rather than fabricate a result —
+       inventing a visa number, or copying a pilgrim's identity and calling it an
+       extraction — the AI path refuses and hands the officer manual entry.
+       Nothing synthetic ever reaches a saved record. */
+    setAlert({
+      tone: 'info',
+      message:
+        'AI extraction is not available yet. Enter the identity from the uploaded visa manually — each value still has to be reviewed individually.',
     });
-
-    const matchStatus: MatchStatus = details.pilgrimId ? 'exact_passport_match' : 'no_match';
-    setMatch({
-      status: matchStatus,
-      pilgrim: details.pilgrimId
-        ? {
-            id: details.pilgrimId,
-            full_name: details.pilgrimName,
-            passport_number: details.passportNumber,
-            visa_number: null,
-            agent_name: details.agentName,
-          }
-        : null,
-      conflicts: [],
-      alternatives: [],
-    });
-
-    setExtractionStatus('complete');
-    setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
-    setStep('review_extraction');
-  }, [file, gemini.ready, details]);
+  }, [file, gemini.ready]);
 
   /** Manual-entry path — used when extraction fails or the limit is exhausted. */
   const startManualEntry = useCallback(() => {
@@ -423,40 +345,114 @@ export default function VisaLoggerPage() {
       ...emptyExtraction(),
       extractedAt: new Date().toISOString(),
     });
-    setMatch({
-      status: details.pilgrimId ? 'exact_passport_match' : 'no_match',
-      pilgrim: details.pilgrimId
-        ? {
-            id: details.pilgrimId,
-            full_name: details.pilgrimName,
-            passport_number: details.passportNumber,
-            visa_number: null,
-            agent_name: details.agentName,
-          }
-        : null,
-      conflicts: [],
-      alternatives: [],
-    });
+    /* Matching happens AFTER the identity is reviewed. Nothing is matched here. */
+    setMatchPhase('idle');
+    setCandidates([]);
     setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
     setStep('review_extraction');
     setAlert({
       tone: 'info',
-      message: 'Manual entry. Type each value from the document, then verify it explicitly.',
+      message: 'Manual entry. Type each value from the document, then review it explicitly.',
     });
-  }, [details]);
+  }, []);
+
+  /**
+   * Finds the HajjERP pilgrim this visa belongs to.
+   *
+   * The reviewed passport number is the key — it is the one identifier on a visa
+   * that maps to exactly one person. A name is supporting context only, and no
+   * candidate is ever selected automatically.
+   *
+   * This reads `pilgrims`; it writes nothing.
+   */
+  const runPilgrimMatch = useCallback(async () => {
+    const passport = (extraction.passportNumber.value ?? '').trim();
+    if (!passport) return;
+
+    setMatchPhase('searching');
+    setMatchError(null);
+    try {
+      const { data, error } = await supabase
+        .from('pilgrims')
+        .select('id, full_name, passport_number, visa_number, sub_agents(organisation_name)')
+        .ilike('passport_number', passport)
+        .limit(10);
+      if (error) throw error;
+
+      const found: MatchCandidate[] = (data ?? []).map((row: Record<string, unknown>) => ({
+        id: row.id as string,
+        full_name: row.full_name as string,
+        passport_number: row.passport_number as string,
+        visa_number: (row.visa_number as string) ?? null,
+        agent_name:
+          (row.sub_agents as { organisation_name: string } | null)?.organisation_name ?? null,
+      }));
+
+      setCandidates(found);
+      setMatchPhase(found.length === 0 ? 'none' : found.length === 1 ? 'exact' : 'multiple');
+    } catch (e) {
+      setCandidates([]);
+      setMatchError(e instanceof Error ? e.message : 'Search failed');
+      setMatchPhase('error');
+    }
+  }, [extraction.passportNumber.value]);
+
+  /**
+   * Records the officer's explicit choice.
+   *
+   * This is the only route to a populated `pilgrimId`, and therefore the only
+   * route to a save. The reviewed visa identity is never overwritten by the
+   * matched record — the two are shown side by side and any difference stays
+   * visible.
+   */
+  const confirmPilgrimMatch = useCallback((candidate: MatchCandidate) => {
+    setDetails((prev) => ({
+      ...prev,
+      pilgrimId: candidate.id,
+      pilgrimName: candidate.full_name,
+    }));
+    setMatch({
+      status: 'exact_passport_match',
+      pilgrim: {
+        id: candidate.id,
+        full_name: candidate.full_name,
+        passport_number: candidate.passport_number,
+        visa_number: candidate.visa_number,
+        agent_name: candidate.agent_name,
+      },
+      conflicts: [],
+      alternatives: [],
+    });
+  }, []);
+
+  const clearPilgrimMatch = useCallback(() => {
+    setDetails((prev) => ({ ...prev, pilgrimId: null, pilgrimName: '' }));
+    setMatch({ status: 'no_match', pilgrim: null, conflicts: [], alternatives: [] });
+    setMatchPhase('idle');
+    setCandidates([]);
+    setMatchError(null);
+  }, []);
 
   const goToConfirm = useCallback(() => {
     if (!reviewComplete) {
       setAlert({
         tone: 'warning',
-        message: 'Every extracted field must be explicitly verified before this case can continue.',
+        message: 'Every identity field must be explicitly reviewed before this case can continue.',
+      });
+      return;
+    }
+    if (!details.pilgrimId) {
+      setAlert({
+        tone: 'warning',
+        message:
+          'Match this visa to a HajjERP pilgrim before continuing. A visa can only be saved against an existing pilgrim record.',
       });
       return;
     }
     setCompletedSteps((prev) => new Set(prev).add('review_extraction'));
     setStep('confirm_save');
     setAlert(null);
-  }, [reviewComplete]);
+  }, [reviewComplete, details.pilgrimId]);
 
   const backToReview = useCallback(() => setStep('review_extraction'), []);
 
@@ -526,13 +522,11 @@ export default function VisaLoggerPage() {
         });
       }
 
-      const t = details.transport;
-      const effectivePrice = t.hasPriceOverride && t.agreedPrice != null ? t.agreedPrice : t.referencePrice;
-      const transportSummary = t.routeName
-        ? `${t.routeName}${t.vehicleTypeName ? ' • ' + t.vehicleTypeName : ''}${
-            effectivePrice != null ? ' • SAR ' + (effectivePrice * t.numberOfVehicles).toFixed(0) : ''
-          }`
-        : '';
+      /* Entitlement only. The visa workflow no longer collects a route, vehicle
+         or price, so the old route/rate/override audit actions are not emitted
+         for new records — there is nothing of that kind to report. Historical
+         entries and the reference tables are untouched. */
+      const transportSummary = transportPackageSummary(details.transportPackage);
 
       const makkahHotelName = details.makkahHotelName;
       if (details.makkahHotelIsCustom && details.makkahCustomHotel && isAdminOrHigher) {
@@ -588,55 +582,6 @@ export default function VisaLoggerPage() {
         }
       }
 
-      if (t.routeId && !t.isCustomRoute) {
-        await logAudit({
-          action: 'transport_route_selected',
-          recordType: 'transport',
-          recordLabel: t.routeName,
-          newValue: { route_id: t.routeId, vehicle: t.vehicleTypeName, vehicles: t.numberOfVehicles },
-          performedBy: profile?.id ?? null,
-          performedByName: profile?.full_name ?? '',
-        });
-        if (t.referencePrice != null) {
-          await logAudit({
-            action: 'transport_rate_applied',
-            recordType: 'transport',
-            recordLabel: t.routeName,
-            newValue: { rate: t.referencePrice, currency: 'SAR' },
-            performedBy: profile?.id ?? null,
-            performedByName: profile?.full_name ?? '',
-          });
-        }
-        if (t.hasPriceOverride && t.agreedPrice != null) {
-          await logAudit({
-            action: 'transport_rate_overridden',
-            recordType: 'transport',
-            recordLabel: t.routeName,
-            previousValue: { rate: t.referencePrice },
-            newValue: {
-              agreed_rate: t.agreedPrice,
-              reason: t.overrideReason,
-              approver: t.overrideApproverName,
-            },
-            performedBy: profile?.id ?? null,
-            performedByName: profile?.full_name ?? '',
-          });
-        }
-      }
-      if (t.isCustomRoute) {
-        await logAudit({
-          action: 'custom_transport_route_entered',
-          recordType: 'transport',
-          recordLabel: `${t.customOrigin} → ${t.customDestination}`,
-          newValue: {
-            vehicle: t.vehicleTypeName,
-            agreed_price: t.agreedPrice,
-            source: 'CUSTOM_ROUTE',
-          },
-          performedBy: profile?.id ?? null,
-          performedByName: profile?.full_name ?? '',
-        });
-      }
 
       const updateData: Record<string, unknown> = {
         visa_number: extraction.visaNumber.value,
@@ -698,6 +643,9 @@ export default function VisaLoggerPage() {
     setExtraction(emptyExtraction());
     setManualEntry(false);
     setMatch({ status: 'no_match', pilgrim: null, conflicts: [], alternatives: [] });
+    setMatchPhase('idle');
+    setCandidates([]);
+    setMatchError(null);
     setExtractionStatus('idle');
     setAlert(null);
     setCompletedSteps(new Set());
@@ -809,9 +757,6 @@ export default function VisaLoggerPage() {
                 <CaseDetailsCard
                   details={details}
                   onChange={handleDetailsChange}
-                  pilgrimOptions={pilgrimOptions}
-                  pilgrimLoading={pilgrimLoading}
-                  onPilgrimSearch={handlePilgrimSearch}
                   agentOptions={agentOptions}
                   staffOptions={staffOptions}
                   errors={visibleErrors}
@@ -962,13 +907,26 @@ export default function VisaLoggerPage() {
 
                 <ReviewScreen
                   extraction={extraction}
-                  match={match}
                   details={details}
                   onFieldEdit={handleFieldEdit}
                   onFieldVerify={handleFieldVerify}
                   onFieldUnverify={handleFieldUnverify}
                   documentPreviewUrl={filePreviewUrl}
                   documentName={file?.name ?? null}
+                />
+
+                {/* Matching comes AFTER the identity has been reviewed, and uses
+                    the reviewed passport number as its key. */}
+                <PilgrimMatchPanel
+                  phase={matchPhase}
+                  passport={extraction.passportNumber.value ?? ''}
+                  travellerName={extraction.passengerName.value ?? ''}
+                  candidates={candidates}
+                  confirmedId={details.pilgrimId}
+                  errorMessage={matchError}
+                  onSearch={runPilgrimMatch}
+                  onConfirm={confirmPilgrimMatch}
+                  onClear={clearPilgrimMatch}
                 />
 
                 <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
@@ -1001,91 +959,79 @@ export default function VisaLoggerPage() {
                 </Button>
 
                 <Panel
-                  title="D · Review & confirmation"
-                  description="Exactly what will be written to the pilgrim record."
+                  title="D · Review &amp; confirmation"
+                  description="Exactly what will be written to the pilgrim record. Staff-entered operational details, staff-reviewed visa identity and the matched HajjERP record are kept apart so their provenance stays legible."
+                  bodyClassName="p-0"
                 >
-                  <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                  {/* ── Staff-entered operational details ── */}
+                  <ConfirmSection title="Staff-entered operational details" provenance="Staff entered">
+                    <ConfirmRow label="Responsible agent">
+                      {details.agentName}
+                      {details.agentIsProposed &&
+                        (isAdminOrHigher ? ' (new — will be created)' : ' (proposed — pending approval)')}
+                    </ConfirmRow>
+                    <ConfirmRow label="Visa company">{details.visaCompany || '—'}</ConfirmRow>
+                    <ConfirmRow label="Transportation package">
+                      {details.transportPackage ? TRANSPORT_PACKAGE_LABELS[details.transportPackage] : '—'}
+                    </ConfirmRow>
+                    <ConfirmRow label="Included legs" className="sm:col-span-2">
+                      {details.transportPackage
+                        ? TRANSPORT_PACKAGE_LEGS[details.transportPackage].length > 0
+                          ? TRANSPORT_PACKAGE_LEGS[details.transportPackage].join(', ')
+                          : 'No transport legs included'
+                        : '—'}
+                    </ConfirmRow>
+                    <ConfirmRow label="Makkah hotel">
+                      {details.makkahHotelName || '—'}
+                      {details.makkahHotelIsCustom && ' (custom)'}
+                    </ConfirmRow>
+                    <ConfirmRow label="Madinah hotel">
+                      {details.madinahHotelName || '—'}
+                      {details.madinahHotelIsCustom && ' (custom)'}
+                    </ConfirmRow>
+                    <ConfirmRow label="Planned outbound">{details.plannedOutboundDate || '—'}</ConfirmRow>
+                    <ConfirmRow label="Expected return">{details.expectedReturnDate || '—'}</ConfirmRow>
+                  </ConfirmSection>
+
+                  {/* ── Staff-reviewed visa identity ── */}
+                  <ConfirmSection title="Staff-reviewed visa identity" provenance="Staff reviewed">
                     {REQUIRED_VERIFICATION_KEYS.map((key) => {
                       const field = extraction[key];
                       const labels: Record<ExtractedFieldKey, string> = {
-                        passengerName: 'Passenger name',
+                        passengerName: 'Traveller name',
                         passportNumber: 'Passport number',
                         visaNumber: 'Visa number',
                         nationality: 'Nationality',
                       };
                       const isIdentifier = key === 'passportNumber' || key === 'visaNumber';
                       return (
-                        <div key={key} className="min-w-0">
-                          <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                            {labels[key]}
-                          </dt>
-                          <dd className="mt-0.5 text-sm text-slate-900">
-                            {isIdentifier ? (
-                              <Identifier value={field.value} />
-                            ) : (
-                              field.value || <span className="text-slate-400">—</span>
-                            )}
-                          </dd>
-                          <p className="mt-0.5 text-2xs text-slate-500">
-                            Verified by {field.verifiedByName ?? 'an officer'}
-                            {field.verifiedAt ? ` · ${formatDateTime(field.verifiedAt)}` : ''}
-                          </p>
-                        </div>
+                        <ConfirmRow
+                          key={key}
+                          label={labels[key]}
+                          note={`Reviewed by ${field.verifiedByName ?? 'an officer'}${
+                            field.verifiedAt ? ` · ${formatDateTime(field.verifiedAt)}` : ''
+                          }`}
+                        >
+                          {isIdentifier ? (
+                            <Identifier value={field.value} />
+                          ) : (
+                            field.value || <span className="text-slate-500">—</span>
+                          )}
+                        </ConfirmRow>
                       );
                     })}
+                  </ConfirmSection>
 
-                    <div className="min-w-0">
-                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Agent</dt>
-                      <dd className="mt-0.5 text-sm text-slate-900">
-                        {details.agentName}
-                        {details.agentIsProposed &&
-                          (isAdminOrHigher ? ' (new — will be created)' : ' (proposed — pending approval)')}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                        Visa company
-                      </dt>
-                      <dd className="mt-0.5 text-sm text-slate-900">{details.visaCompany || '—'}</dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                        Makkah hotel
-                      </dt>
-                      <dd className="mt-0.5 text-sm text-slate-900">
-                        {details.makkahHotelName || '—'}
-                        {details.makkahHotelIsCustom && ' (custom)'}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                        Madinah hotel
-                      </dt>
-                      <dd className="mt-0.5 text-sm text-slate-900">
-                        {details.madinahHotelName || '—'}
-                        {details.madinahHotelIsCustom && ' (custom)'}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                        Planned outbound
-                      </dt>
-                      <dd className="mt-0.5 text-sm text-slate-900">{details.plannedOutboundDate || '—'}</dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-2xs font-semibold uppercase tracking-wide text-slate-500">
-                        Expected return
-                      </dt>
-                      <dd className="mt-0.5 text-sm text-slate-900">{details.expectedReturnDate || '—'}</dd>
-                    </div>
-                  </dl>
-
-                  <div className="mt-5 border-t border-slate-200 pt-4">
-                    <p className="mb-2 text-2xs font-bold uppercase tracking-wide text-slate-600">
-                      Ground transportation
-                    </p>
-                    <TransportSummary transport={details.transport} />
-                  </div>
+                  {/* ── Matched HajjERP record — the row this save updates ── */}
+                  <ConfirmSection title="Matched HajjERP record" provenance="Matched">
+                    <ConfirmRow label="Pilgrim name">{match.pilgrim?.full_name || '—'}</ConfirmRow>
+                    <ConfirmRow label="Passport on record">
+                      <Identifier value={match.pilgrim?.passport_number ?? null} />
+                    </ConfirmRow>
+                    <ConfirmRow label="HajjERP record" className="sm:col-span-2">
+                      <Identifier value={details.pilgrimId} />
+                    </ConfirmRow>
+                  </ConfirmSection>
                 </Panel>
 
                 <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1099,7 +1045,8 @@ export default function VisaLoggerPage() {
                   <Button
                     onClick={() => setConfirmDialog(true)}
                     loading={saving}
-                    disabled={!reviewComplete}
+                    /* A visa is never saved without a confirmed HajjERP pilgrim. */
+                    disabled={!reviewComplete || !details.pilgrimId}
                     icon={<Save className="h-4 w-4" aria-hidden="true" />}
                   >
                     Confirm and save visa record

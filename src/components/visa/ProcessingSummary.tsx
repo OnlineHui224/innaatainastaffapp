@@ -2,17 +2,16 @@ import {
   User,
   Building2,
   Bus,
-  FileText,
   Hotel,
   Calendar,
   Upload,
   Sparkles,
   CheckCircle2,
   AlertCircle,
-  Package,
   Tag,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { TRANSPORT_PACKAGE_LABELS } from '@/types/visa';
 import type { VisaCaseDetails, WorkflowStep } from '@/types/visa';
 
 interface ProcessingSummaryProps {
@@ -82,11 +81,6 @@ export function ProcessingSummary({
   missingFields,
 }: ProcessingSummaryProps) {
 
-  const transport = details.transport;
-  const effectivePrice = transport.hasPriceOverride && transport.agreedPrice != null
-    ? transport.agreedPrice
-    : transport.referencePrice;
-  const transportTotal = effectivePrice != null ? `SAR ${(effectivePrice * transport.numberOfVehicles).toFixed(0)}` : '';
 
   return (
     <div className="rounded-lg border border-slate-300 bg-white lg:sticky lg:top-6">
@@ -107,20 +101,14 @@ export function ProcessingSummary({
           isCustom={details.agentIsProposed}
         />
 
-        {/* Ground Transportation */}
-        <SectionLabel>Ground Transportation</SectionLabel>
-        <Row icon={Bus} label="Route" value={transport.routeName} isSet={!!transport.routeName} isCustom={transport.isCustomRoute} />
-        <Row icon={Package} label="Vehicle Type" value={transport.vehicleTypeName} isSet={!!transport.vehicleTypeName} />
-        {transport.referencePrice != null && (
-          <>
-            <Row icon={FileText} label="Reference Rate" value={`SAR ${transport.referencePrice.toFixed(0)}`} isSet={true} />
-            {transport.hasPriceOverride && transport.agreedPrice != null && (
-              <Row icon={FileText} label="Agreed Rate (Override)" value={`SAR ${transport.agreedPrice.toFixed(0)}`} isSet={true} isCustom />
-            )}
-            <Row icon={Bus} label="Number of Vehicles" value={`${transport.numberOfVehicles}`} isSet={true} />
-            <Row icon={Package} label="Total Amount" value={transportTotal} isSet={!!transportTotal} />
-          </>
-        )}
+        {/* Transportation — entitlement only */}
+        <SectionLabel>Transportation</SectionLabel>
+        <Row
+          icon={Bus}
+          label="Package"
+          value={details.transportPackage ? TRANSPORT_PACKAGE_LABELS[details.transportPackage] : ''}
+          isSet={!!details.transportPackage}
+        />
 
         {/* Hotels */}
         <SectionLabel>Hotels</SectionLabel>

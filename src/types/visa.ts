@@ -66,6 +66,56 @@ export interface TransportSelection {
   overrideApproverName: string;
 }
 
+
+// ── Visa-level transportation entitlement ──
+
+/**
+ * What the traveller is entitled to, at business level.
+ *
+ * The Visa & Contract Logger records an ENTITLEMENT, not a transport contract.
+ * Route, vehicle, pricing, provider, pickup and approval belong to the future
+ * Ground Transport Contracts module; `TransportSelection` above is retained for
+ * that module and for historical records, and is deliberately no longer
+ * collected by this workflow.
+ */
+export type TransportPackage = 'airport_transfers' | 'full_route' | 'no_transport';
+
+export const TRANSPORT_PACKAGE_LABELS: Record<TransportPackage, string> = {
+  airport_transfers: 'Airport transfers',
+  full_route: 'Full route',
+  no_transport: 'No transport',
+};
+
+/** The legs each package includes. `no_transport` deliberately includes none. */
+export const TRANSPORT_PACKAGE_LEGS: Record<TransportPackage, string[]> = {
+  airport_transfers: ['Jeddah arrival transfer', 'Departure airport transfer'],
+  full_route: [
+    'Jeddah arrival transfer',
+    'Departure airport transfer',
+    'Makkah → Madinah intercity',
+    'Ziyarat tour',
+  ],
+  no_transport: [],
+};
+
+export const TRANSPORT_PACKAGE_ORDER: TransportPackage[] = [
+  'airport_transfers',
+  'full_route',
+  'no_transport',
+];
+
+/**
+ * The single line persisted to the existing `pilgrims.transportation` field.
+ *
+ * Entitlement only — no vehicle class, provider or price is ever appended.
+ */
+export function transportPackageSummary(pkg: TransportPackage | null): string {
+  if (!pkg) return '';
+  const legs = TRANSPORT_PACKAGE_LEGS[pkg];
+  if (legs.length === 0) return TRANSPORT_PACKAGE_LABELS[pkg];
+  return `${TRANSPORT_PACKAGE_LABELS[pkg]} · ${legs.join(', ')}`;
+}
+
 // ── Agent manual entry ──
 export interface NewAgentEntry {
   organisationName: string;
@@ -117,7 +167,13 @@ export interface VisaCaseDetails {
   madinahHotelName: string;
   madinahHotelIsCustom: boolean;
   madinahCustomHotel: CustomHotelEntry | null;
+  /**
+   * Retained for historical records and the future Ground Transport Contracts
+   * module. The Visa workflow no longer collects it.
+   */
   transport: TransportSelection;
+  /** The business-level entitlement this visa record carries. */
+  transportPackage: TransportPackage | null;
   plannedOutboundDate: string;
   expectedReturnDate: string;
 }

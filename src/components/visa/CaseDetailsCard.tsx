@@ -304,7 +304,10 @@ export function CaseDetailsCard({
   return (
     <div className="rounded-lg border border-slate-300 bg-white">
       <div className="px-6 py-5 border-b border-slate-200">
-        <h3 className="font-display font-bold text-lg text-navy-900">Visa Case Details</h3>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h3 className="font-display text-lg font-bold text-navy-900">A · Operational details</h3>
+          <span className="text-xs text-slate-500">Entered by staff — not AI</span>
+        </div>
         <p className="mt-1 text-sm text-slate-500">
           Select the operational information connected to this visa document.
         </p>

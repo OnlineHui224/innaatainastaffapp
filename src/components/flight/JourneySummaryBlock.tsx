@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
-import { BlockStateBadge } from './BlockStateBadge';
+import { BlockStateBadge } from '@/components/ReviewStateBadge';
 import {
   carrierLabel,
   totalPax,

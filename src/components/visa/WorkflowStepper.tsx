@@ -7,11 +7,17 @@ interface StepperProps {
   completedSteps: Set<WorkflowStep>;
 }
 
+/**
+ * The four sections of a visa record, in the order they are completed.
+ *
+ * Labelled A–D to match the approved design's section language, while keeping
+ * the existing step-by-step navigation this workflow is built on.
+ */
 const STEPS: { key: WorkflowStep; label: string; number: number }[] = [
-  { key: 'case_details', label: 'Case Details', number: 1 },
-  { key: 'upload_visa', label: 'Upload Visa', number: 2 },
-  { key: 'review_extraction', label: 'Review Extraction', number: 3 },
-  { key: 'confirm_save', label: 'Confirm & Save', number: 4 },
+  { key: 'case_details', label: 'Operational Details', number: 1 },
+  { key: 'upload_visa', label: 'Visa Document', number: 2 },
+  { key: 'review_extraction', label: 'Extracted Identity', number: 3 },
+  { key: 'confirm_save', label: 'Review & Confirmation', number: 4 },
 ];
 
 export function WorkflowStepper({ currentStep, completedSteps }: StepperProps) {

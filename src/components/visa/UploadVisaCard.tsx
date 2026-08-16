@@ -115,9 +115,13 @@ export function UploadVisaCard({ file, onFileSelect, disabled, error }: UploadVi
   return (
     <div className="rounded-lg border border-slate-300 bg-white">
       <div className="px-6 py-5 border-b border-slate-200">
-        <h3 className="font-display font-bold text-lg text-navy-900">Upload Visa Document</h3>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h3 className="font-display text-lg font-bold text-navy-900">B · Visa document</h3>
+          <span className="text-xs text-slate-500">One document per record</span>
+        </div>
         <p className="mt-1 text-sm text-slate-500">
-          Upload the visa document for AI extraction. The file will not be processed until you start extraction.
+          A single issued visa. Nothing is read until you start extraction, and nothing is saved
+          until you have reviewed what was read.
         </p>
       </div>
 
@@ -141,16 +145,25 @@ export function UploadVisaCard({ file, onFileSelect, disabled, error }: UploadVi
               <UploadCloud className="h-7 w-7" />
             </div>
             <div className="text-center">
-              <p className="text-sm font-semibold text-slate-700">
-                Drag and drop the visa document here
+              <p className="text-sm font-semibold text-slate-700">Drop the visa document here</p>
+              <p className="mt-1 text-sm text-slate-500">
+                A single issued visa. Replace it rather than adding a second file.
               </p>
               <p className="mt-1 text-sm text-slate-400">
-                or <span className="text-brand-600 font-medium">choose a file</span>
+                or <span className="font-medium text-brand-600">browse files</span>
               </p>
             </div>
-            <p className="text-xs text-slate-400">
-              Supported formats: PDF, JPG, JPEG, PNG — Maximum size: {MAX_SIZE_MB} MB
-            </p>
+            <div className="flex items-center gap-1.5" aria-hidden="true">
+              {['PDF', 'JPG', 'PNG'].map((label) => (
+                <span
+                  key={label}
+                  className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-2xs font-bold tracking-wide text-slate-600"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+            <p className="text-xs text-slate-400">Maximum size: {MAX_SIZE_MB} MB</p>
             <input
               ref={inputRef}
               type="file"

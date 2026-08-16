@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
   Bookmark,
-  Bot,
   Bus,
   CheckCircle2,
   FileText,
   Flag,
   Hotel,
   Lock,
+  PenLine,
   ShieldCheck,
   User,
   Users,
@@ -22,6 +23,8 @@ import { Button } from '@/components/ui/Button';
 import { Identifier, Input } from '@/components/ui/Field';
 import { Panel } from '@/components/ui/Panel';
 import { TransportSummary } from './TransportSummary';
+import { BlockStateBadge } from '@/components/ReviewStateBadge';
+import type { BlockState } from '@/types/flightOps';
 import type {
   ExtractedField,
   ExtractedFieldKey,
@@ -42,6 +45,8 @@ interface ReviewScreenProps {
   onFieldVerify: (key: ExtractedFieldKey) => void;
   /** Explicit un-verification, so an officer can withdraw a review. */
   onFieldUnverify: (key: ExtractedFieldKey) => void;
+  /** Explicitly reviews every field that holds a value. Still an officer action. */
+  onVerifyAll: () => void;
   /** Local preview URL for the uploaded document, when previewable. */
   documentPreviewUrl: string | null;
   documentName: string | null;
@@ -130,6 +135,7 @@ export function ReviewScreen({
   onFieldEdit,
   onFieldVerify,
   onFieldUnverify,
+  onVerifyAll,
   documentPreviewUrl,
   documentName,
 }: ReviewScreenProps) {
@@ -141,25 +147,23 @@ export function ReviewScreen({
   return (
     <div className="space-y-6">
       <Panel
-        title="Extracted visa information"
-        description="Each value below was produced by the extractor. Editing a value does not review it — every field must be verified explicitly."
+        title="C · Extracted identity"
+        description="Traveller name, passport number and visa number as read from the visa document. Each one must be reviewed individually before the record can be saved."
         actions={
           <Badge tone={verifiedCount === total ? 'positive' : 'caution'} treatment={verifiedCount === total ? 'solid' : 'outline'}>
-            {verifiedCount} of {total} verified
+            {verifiedCount} of {total} reviewed
           </Badge>
         }
         bodyClassName="p-0"
       >
         <div className="grid grid-cols-1 xl:grid-cols-5">
           {/* Fields */}
-          <div className="space-y-5 border-b border-slate-200 p-5 xl:col-span-3 xl:border-b-0 xl:border-r">
-            {verifiedCount < total && (
-              <Alert tone="warning" title="Verification required">
-                {total - verifiedCount} {total - verifiedCount === 1 ? 'field has' : 'fields have'} not been
-                verified. Continuing stays disabled until every field has been explicitly confirmed against the
-                document.
-              </Alert>
-            )}
+          <div className="border-b border-slate-200 xl:col-span-3 xl:border-b-0 xl:border-r">
+            {/* The rule this whole section exists to enforce. */}
+            <p className="flex items-center gap-2.5 border-b border-slate-200 bg-slate-50 px-4.5 py-3 text-xs text-slate-700">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+              Typing a value does not verify it. Each field must be marked reviewed on its own.
+            </p>
 
             {FIELDS.map((spec) => (
               <ExtractedFieldRow
@@ -171,6 +175,17 @@ export function ReviewScreen({
                 onUnverify={() => onFieldUnverify(spec.key)}
               />
             ))}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4.5 py-3">
+              <span className="text-xs text-slate-600">
+                {verifiedCount === total
+                  ? 'Every value has been reviewed against the document.'
+                  : `${total - verifiedCount} ${total - verifiedCount === 1 ? 'value still needs' : 'values still need'} review before this record can be saved.`}
+              </span>
+              <Button size="sm" variant="secondary" onClick={onVerifyAll} disabled={verifiedCount === total}>
+                Mark all {total} reviewed
+              </Button>
+            </div>
           </div>
 
           {/* Document preview beside the fields where desktop space permits */}
@@ -338,79 +353,154 @@ function ExtractedFieldRow({
   onVerify: () => void;
   onUnverify: () => void;
 }) {
-  const Icon = spec.icon;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
   const inputId = `extracted-${spec.key}`;
-  const hasValue = Boolean((field.value ?? '').trim());
+  const value = (field.value ?? '').trim();
+  const hasValue = Boolean(value);
+
+  /**
+   * The four states an extracted value can be in. `need` (nothing extracted)
+   * blocks verification outright — an officer cannot review a value that is not
+   * there.
+   */
+  const state: BlockState = !hasValue
+    ? 'need'
+    : field.verified
+      ? 'ok'
+      : field.edited
+        ? 'edited'
+        : 'ai';
+
+  const rail =
+    state === 'ok'
+      ? 'border-l-emerald-700'
+      : state === 'ai'
+        ? 'border-l-brand-600'
+        : 'border-l-amber-400';
+
+  function beginEdit() {
+    setDraft(field.value ?? '');
+    setEditing(true);
+  }
+
+  /**
+   * Commits the edit.
+   *
+   * `onEdit` runs the platform's `editFieldValue`, which stores the value and
+   * clears any verification. Editing is deliberately a discrete action rather
+   * than per-keystroke, so an officer sees exactly when a review was withdrawn.
+   */
+  function commitEdit() {
+    onEdit(draft);
+    setEditing(false);
+  }
 
   return (
-    <div
-      className={cn(
-        'rounded-md border p-3.5',
-        field.verified ? 'border-slate-700 bg-slate-50' : 'border-dashed border-amber-500 bg-amber-50/40',
-      )}
-    >
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <label htmlFor={inputId} className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
-          <Icon className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+    <div className={cn('border-b border-l-[3px] border-slate-100 px-4.5 py-4', rail)}>
+      <div className="mb-2.5 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-2xs font-bold uppercase tracking-[0.13em] text-slate-500">
           {spec.label}
-        </label>
-
-        {field.verified ? (
-          <Badge tone="neutral" treatment="solid" icon={<CheckCircle2 className="h-3 w-3" aria-hidden="true" />}>
-            Human reviewed
-          </Badge>
-        ) : (
-          <Badge tone="caution" icon={<Bot className="h-3 w-3" aria-hidden="true" />}>
-            {field.confidence ? `AI extracted · ${field.confidence} confidence` : 'AI extracted'}
-          </Badge>
-        )}
+        </span>
+        <BlockStateBadge state={state} label={state === 'need' ? 'Not found' : undefined} />
       </div>
 
-      <Input
-        id={inputId}
-        value={field.value ?? ''}
-        onChange={(e) => onEdit(e.target.value)}
-        placeholder={spec.placeholder}
-        identifier={spec.identifier}
-        aria-describedby={`${inputId}-state`}
-      />
+      {editing ? (
+        <div>
+          <label htmlFor={inputId} className="mb-1.5 block text-xs text-slate-600">
+            {spec.help ?? `Type the ${spec.label.toLowerCase()} exactly as printed on the visa.`}
+          </label>
+          <Input
+            id={inputId}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={spec.placeholder}
+            identifier={spec.identifier}
+            className="max-w-sm"
+            autoFocus
+          />
+          <div className="mt-3 flex flex-wrap items-center gap-2.5">
+            <Button
+              size="sm"
+              onClick={commitEdit}
+              className="border-navy-800 bg-navy-800 hover:border-navy-900 hover:bg-navy-900"
+            >
+              Save value
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <span className="text-xs text-slate-600">
+              Saving leaves this field unverified until you mark it reviewed.
+            </span>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3.5">
+            <p
+              className={cn(
+                'min-w-0 break-words text-lg font-extrabold',
+                spec.identifier && 'identifier tracking-wider',
+                hasValue ? 'text-navy-900' : 'text-amber-700',
+              )}
+            >
+              {hasValue ? value : 'Not found'}
+            </p>
 
-      <div id={`${inputId}-state`} className="mt-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="min-w-0 text-2xs leading-relaxed text-slate-600">
-          {field.verified ? (
-            <>
-              Verified by{' '}
-              <span className="font-semibold text-slate-800">{field.verifiedByName ?? 'an officer'}</span>
-              {field.verifiedAt ? ` · ${formatDateTime(field.verifiedAt)}` : ''}
-              {field.edited && ' · value was edited before verification'}
-            </>
-          ) : (
-            <>
-              {field.edited
-                ? 'Edited but not yet verified. Editing a value is not the same as reviewing it.'
-                : spec.help ?? 'Not yet verified. Confirm this value against the document.'}
-              {field.sourcePage ? ` Source: page ${field.sourcePage}.` : ''}
-            </>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<PenLine className="h-3 w-3" aria-hidden="true" />}
+                onClick={beginEdit}
+              >
+                Correct
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={field.verified ? onUnverify : onVerify}
+                disabled={!hasValue}
+                title={hasValue ? undefined : 'Enter a value before reviewing it'}
+                className={cn(
+                  field.verified &&
+                    'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100',
+                  !field.verified && hasValue && 'border-navy-800 text-navy-900',
+                )}
+              >
+                {field.verified ? 'Reviewed' : 'Mark reviewed'}
+              </Button>
+            </div>
+          </div>
+
+          <p className="mt-2 text-2xs leading-relaxed text-slate-600">
+            {field.verified ? (
+              <>
+                Reviewed by{' '}
+                <span className="font-semibold text-slate-800">{field.verifiedByName ?? 'an officer'}</span>
+                {field.verifiedAt ? ` · ${formatDateTime(field.verifiedAt)}` : ''}
+                {field.edited && ' · value was corrected before review'}
+              </>
+            ) : (
+              <>
+                {field.edited
+                  ? 'Corrected but not yet reviewed. Editing a value is not the same as reviewing it.'
+                  : spec.help ?? 'Not yet reviewed. Confirm this value against the document.'}
+                {field.sourcePage ? ` Source: page ${field.sourcePage}.` : ''}
+              </>
+            )}
+          </p>
+
+          {state === 'need' && (
+            <p className="mt-2.5 rounded-lg border border-amber-400 bg-amber-50 px-3.5 py-2.5 text-xs leading-relaxed text-amber-900">
+              This value was not found in the document. Enter it manually before it can be marked
+              reviewed — the record cannot be saved without it.
+            </p>
           )}
-        </p>
-
-        {field.verified ? (
-          <Button size="sm" variant="ghost" onClick={onUnverify}>
-            Withdraw verification
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="confirm"
-            onClick={onVerify}
-            disabled={!hasValue}
-            title={hasValue ? undefined : 'Enter a value before verifying it'}
-            icon={<CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />}
-          >
-            Verify this value
-          </Button>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

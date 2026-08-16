@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, PenLine, Plane, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button, IconButton } from '@/components/ui/Button';
-import { BlockStateBadge } from './BlockStateBadge';
+import { BlockStateBadge } from '@/components/ReviewStateBadge';
 import {
   arrivesNextDay,
   carrierLabel,

@@ -282,6 +282,29 @@ export default function VisaLoggerPage() {
     setExtraction((prev) => ({ ...prev, [key]: unverifyField(prev[key]) }));
   }, []);
 
+  /**
+   * Reviews every field that actually holds a value.
+   *
+   * Still an explicit officer action, and still routed through `verifyField`, so
+   * the officer and timestamp are recorded per field exactly as a single review
+   * would record them. A field with no value stays unverified — there is nothing
+   * to confirm against the document.
+   */
+  const handleVerifyAll = useCallback(() => {
+    setExtraction((prev) => {
+      const next = { ...prev };
+      REQUIRED_VERIFICATION_KEYS.forEach((key) => {
+        if ((prev[key].value ?? '').trim()) {
+          next[key] = verifyField(prev[key], {
+            id: profile?.id ?? null,
+            name: profile?.full_name ?? 'Staff member',
+          });
+        }
+      });
+      return next;
+    });
+  }, [profile?.id, profile?.full_name]);
+
   const goToUpload = useCallback(() => {
     if (!caseDetailsValid) {
       setAlert({ tone: 'warning', message: 'Complete the required case details before continuing.' });
@@ -723,7 +746,7 @@ export default function VisaLoggerPage() {
       <PageHeader
         eyebrow="Operations"
         title="Visa &amp; Contract Logger"
-        subtitle="Extract visa information, review every value explicitly, match it to an existing pilgrim, and record the confirmed details."
+        subtitle="Extract visa information, review every value explicitly, match it to an existing pilgrim, and record the confirmed details. HajjERP is the system of record for every visa logged here."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700">
@@ -913,6 +936,7 @@ export default function VisaLoggerPage() {
                   onFieldEdit={handleFieldEdit}
                   onFieldVerify={handleFieldVerify}
                   onFieldUnverify={handleFieldUnverify}
+                  onVerifyAll={handleVerifyAll}
                   documentPreviewUrl={filePreviewUrl}
                   documentName={file?.name ?? null}
                 />
@@ -947,7 +971,7 @@ export default function VisaLoggerPage() {
                 </Button>
 
                 <Panel
-                  title="Confirmation summary"
+                  title="D · Review & confirmation"
                   description="Exactly what will be written to the pilgrim record."
                 >
                   <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">

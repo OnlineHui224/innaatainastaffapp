@@ -45,8 +45,6 @@ interface ReviewScreenProps {
   onFieldVerify: (key: ExtractedFieldKey) => void;
   /** Explicit un-verification, so an officer can withdraw a review. */
   onFieldUnverify: (key: ExtractedFieldKey) => void;
-  /** Explicitly reviews every field that holds a value. Still an officer action. */
-  onVerifyAll: () => void;
   /** Local preview URL for the uploaded document, when previewable. */
   documentPreviewUrl: string | null;
   documentName: string | null;
@@ -135,7 +133,6 @@ export function ReviewScreen({
   onFieldEdit,
   onFieldVerify,
   onFieldUnverify,
-  onVerifyAll,
   documentPreviewUrl,
   documentName,
 }: ReviewScreenProps) {
@@ -176,16 +173,14 @@ export function ReviewScreen({
               />
             ))}
 
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4.5 py-3">
-              <span className="text-xs text-slate-600">
-                {verifiedCount === total
-                  ? 'Every value has been reviewed against the document.'
-                  : `${total - verifiedCount} ${total - verifiedCount === 1 ? 'value still needs' : 'values still need'} review before this record can be saved.`}
-              </span>
-              <Button size="sm" variant="secondary" onClick={onVerifyAll} disabled={verifiedCount === total}>
-                Mark all {total} reviewed
-              </Button>
-            </div>
+            {/* No bulk action here by design. Each extracted value must be
+                accepted on its own, so the provenance trail shows an officer
+                individually confirmed every one of them against the document. */}
+            <p className="bg-slate-50 px-4.5 py-3 text-xs text-slate-600">
+              {verifiedCount === total
+                ? 'Every value has been reviewed individually against the document.'
+                : `${total - verifiedCount} ${total - verifiedCount === 1 ? 'value still needs' : 'values still need'} review before this record can be saved. Each one is reviewed on its own.`}
+            </p>
           </div>
 
           {/* Document preview beside the fields where desktop space permits */}
@@ -361,9 +356,9 @@ function ExtractedFieldRow({
   const hasValue = Boolean(value);
 
   /**
-   * The four states an extracted value can be in. `need` (nothing extracted)
-   * blocks verification outright — an officer cannot review a value that is not
-   * there.
+   * The committed state of the value, from the record itself. `need` (nothing
+   * extracted) blocks verification outright — an officer cannot review a value
+   * that is not there.
    */
   const state: BlockState = !hasValue
     ? 'need'
@@ -373,10 +368,24 @@ function ExtractedFieldRow({
         ? 'edited'
         : 'ai';
 
+  /**
+   * True while the officer is actively changing the value in correction mode.
+   *
+   * The draft is local and nothing is committed until "Save value" is pressed,
+   * but the reviewed mark must not survive on screen while the value beneath it
+   * is being changed. A green "Staff reviewed" badge sitting above a field the
+   * officer is midway through rewriting asserts something that is no longer
+   * true.
+   */
+  const dirty = editing && draft !== (field.value ?? '');
+
+  /** What the badge and rail actually show. A pending change always reads as edited. */
+  const displayState: BlockState = dirty ? 'edited' : state;
+
   const rail =
-    state === 'ok'
+    displayState === 'ok'
       ? 'border-l-emerald-700'
-      : state === 'ai'
+      : displayState === 'ai'
         ? 'border-l-brand-600'
         : 'border-l-amber-400';
 
@@ -403,7 +412,10 @@ function ExtractedFieldRow({
         <span className="text-2xs font-bold uppercase tracking-[0.13em] text-slate-500">
           {spec.label}
         </span>
-        <BlockStateBadge state={state} label={state === 'need' ? 'Not found' : undefined} />
+        <BlockStateBadge
+          state={displayState}
+          label={displayState === 'need' ? 'Not found' : undefined}
+        />
       </div>
 
       {editing ? (
@@ -428,11 +440,15 @@ function ExtractedFieldRow({
             >
               Save value
             </Button>
+            {/* Cancel discards the local draft only. Nothing was committed, so the
+                value and any review it already carried are left exactly as they were. */}
             <Button size="sm" variant="secondary" onClick={() => setEditing(false)}>
               Cancel
             </Button>
             <span className="text-xs text-slate-600">
-              Saving leaves this field unverified until you mark it reviewed.
+              {dirty && field.verified
+                ? 'This value is no longer marked reviewed. Saving keeps it unverified until you review it again.'
+                : 'Saving leaves this field unverified until you mark it reviewed.'}
             </span>
           </div>
         </div>

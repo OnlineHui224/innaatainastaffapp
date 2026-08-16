@@ -346,9 +346,9 @@ export interface VisaLogEntry {
 
 export const EXTRACTION_STATUS_MESSAGES: Record<ExtractionStatus, string> = {
   idle: '',
-  securing: 'Securing document',
-  uploading: 'Reading visa',
-  extracting: 'Extracting information',
+  securing: 'Preparing document',
+  uploading: 'Sending to HajjERP extraction',
+  extracting: 'Reading the visa',
   matching: 'Searching HajjERP',
   checking_duplicates: 'Checking conflicts',
   preparing_review: 'Preparing review',
@@ -356,13 +356,19 @@ export const EXTRACTION_STATUS_MESSAGES: Record<ExtractionStatus, string> = {
   error: 'Extraction failed',
 };
 
-/** The staged progress an operator sees while a document is processed. */
+/**
+ * The staged progress an operator sees while a document is processed.
+ *
+ * `matching` and `checking_duplicates` are deliberately NOT here. Matching runs
+ * from the reviewed passport number, after this identity has been checked — so
+ * showing "Searching HajjERP" during extraction would describe work that is not
+ * happening. The two statuses remain in the union for the matching step's own
+ * use.
+ */
 export const EXTRACTION_STAGES: ExtractionStatus[] = [
   'securing',
   'uploading',
   'extracting',
-  'matching',
-  'checking_duplicates',
   'preparing_review',
 ];
 

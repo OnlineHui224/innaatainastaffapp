@@ -17,10 +17,6 @@ import type { VisaCaseDetails, WorkflowStep } from '@/types/visa';
 interface ProcessingSummaryProps {
   details: VisaCaseDetails;
   file: File | null;
-  /** Personal Gemini connection status label, e.g. "Connected". */
-  geminiStatus: string;
-  /** Tailwind chip classes for that status. */
-  geminiChip: string;
   currentStep: WorkflowStep;
   isReady: boolean;
   missingFields: string[];
@@ -74,8 +70,6 @@ function SectionLabel({ children }: { children: string }) {
 export function ProcessingSummary({
   details,
   file,
-  geminiStatus,
-  geminiChip,
   currentStep,
   isReady,
   missingFields,
@@ -133,27 +127,17 @@ export function ProcessingSummary({
         <Row icon={Calendar} label="Expected Return" value={details.expectedReturnDate} isSet={!!details.expectedReturnDate} />
         <Row icon={Upload} label="Uploaded File" value={file?.name || ''} isSet={!!file} />
 
-        {/* Personal Gemini access.
-            There is deliberately no usage meter: HajjERP does not know a staff
-            member's remaining personal allowance, and inventing a figure would
-            assert something untrue. Availability is reported, not quantified. */}
+        {/* AI extraction.
+            Deliberately no status light and no usage meter. Whether extraction
+            will succeed is not known until it is attempted, and a green dot
+            claiming otherwise would assert something this screen cannot know. */}
         <div className="mt-3 pt-3 border-t border-slate-200">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="h-3.5 w-3.5 text-brand-500" />
-              <span className="text-xs font-semibold text-slate-600">Personal Gemini</span>
-            </div>
-            <span
-              className={cn(
-                'rounded border px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide',
-                geminiChip,
-              )}
-            >
-              {geminiStatus}
-            </span>
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-brand-500" />
+            <span className="text-xs font-semibold text-slate-600">AI extraction</span>
           </div>
           <p className="mt-1.5 text-2xs leading-snug text-slate-500">
-            Your own Google authorization. Usage is separate from other staff accounts.
+            Provided securely through HajjERP. Documents are read on the server and are not stored.
           </p>
         </div>
       </div>

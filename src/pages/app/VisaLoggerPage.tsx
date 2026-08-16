@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { usePersonalGemini } from '@/context/personalGeminiStore';
+import { VisaExtractionError, extractVisaIdentity } from '@/lib/visaExtraction';
 import { logAudit } from '@/lib/audit';
 import { formatDateTime } from '@/lib/priority';
 import { WorkflowStepper } from '@/components/visa/WorkflowStepper';
@@ -35,9 +35,8 @@ import { ViewerReadOnly } from '@/components/visa/ViewerReadOnly';
 import { ProvenanceLadder, buildCaseProvenance } from '@/components/visa/ProvenanceLadder';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageHeader } from '@/components/PageHeader';
-import { PersonalGeminiBanner } from '@/components/gemini/PersonalGeminiBanner';
 import { Alert } from '@/components/ui/Alert';
-import { Button, ButtonLink } from '@/components/ui/Button';
+import { Button } from '@/components/ui/Button';
 import { Identifier } from '@/components/ui/Field';
 import { Panel } from '@/components/ui/Panel';
 import type { ComboboxOption } from '@/components/visa/SearchableCombobox';
@@ -61,7 +60,6 @@ import {
   unverifyField,
   verifyField,
 } from '@/types/visa';
-import { GEMINI_STATUS, VISA_CTA } from '@/types/personalGemini';
 import type { SubAgent } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -104,7 +102,6 @@ function emptyExtraction(): VisaExtractionResult {
 export default function VisaLoggerPage() {
   const navigate = useNavigate();
   const { profile, isAdminOrHigher } = useAuth();
-  const gemini = usePersonalGemini();
 
   const isViewer = profile?.role === 'viewer';
 
@@ -312,30 +309,81 @@ export default function VisaLoggerPage() {
     setAlert(null);
   }, []);
 
+  /**
+   * Reads the uploaded document through the server-side extraction function.
+   *
+   * What comes back is a proposal, never a decision: every value lands in the
+   * review screen unverified, and `confidence` is carried through so a shaky
+   * read is visible rather than silently equal to a clear one. A value the
+   * document did not yield arrives as `null` and stays blank — nothing is
+   * invented to fill a gap.
+   */
   const handleExtract = useCallback(async () => {
     if (!file) {
       setAlert({ tone: 'warning', message: 'Upload a visa document before starting extraction.' });
       return;
     }
-    if (!gemini.ready) {
-      setAlert({
-        tone: 'warning',
-        message:
-          'Your personal Gemini access is not available for extraction right now. You can continue with manual entry, or set up your access from My Account.',
-      });
-      return;
-    }
 
-    /* Real Personal Gemini is not implemented. Rather than fabricate a result —
-       inventing a visa number, or copying a pilgrim's identity and calling it an
-       extraction — the AI path refuses and hands the officer manual entry.
-       Nothing synthetic ever reaches a saved record. */
-    setAlert({
-      tone: 'info',
-      message:
-        'AI extraction is not available yet. Enter the identity from the uploaded visa manually — each value still has to be reviewed individually.',
-    });
-  }, [file, gemini.ready]);
+    setAlert(null);
+    setExtractionStatus('securing');
+
+    try {
+      /* Staged only so the officer sees the request is alive. The stages are
+         honest about what is happening — matching is NOT one of them, because
+         matching happens after this identity has been reviewed. */
+      setExtractionStatus('uploading');
+      const result = await extractVisaIdentity(file);
+      setExtractionStatus('extracting');
+
+      const extractedAt = result.extractedAt || new Date().toISOString();
+      const field = (source: { value: string | null; confidence: 'high' | 'medium' | 'low' }) => ({
+        ...emptyExtractedField(),
+        value: source.value,
+        originalValue: source.value,
+        confidence: source.value === null ? null : source.confidence,
+        /* Anything short of a confident read is flagged for a closer look. A
+           null value needs review by definition — it has to be typed. */
+        needsReview: source.value === null || source.confidence !== 'high',
+      });
+
+      setExtractionStatus('preparing_review');
+      setManualEntry(false);
+      setExtraction({
+        passengerName: field(result.fields.travellerName),
+        passportNumber: field(result.fields.passportNumber),
+        visaNumber: field(result.fields.visaNumber),
+        nationality: field(result.fields.nationality),
+        extractedAt,
+      });
+
+      /* Matching is not attempted here. It runs from the reviewed passport
+         number, after the officer has confirmed what the document says. */
+      setMatchPhase('idle');
+      setCandidates([]);
+      setExtractionStatus('complete');
+      setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
+      setStep('review_extraction');
+
+      const unread = Object.values(result.fields).filter((f) => f.value === null).length;
+
+      setAlert({
+        tone: unread > 0 ? 'warning' : 'info',
+        message:
+          unread > 0
+            ? `Extraction complete, but ${unread} of 4 values could not be read. Type those in from the document, then review every value against it.`
+            : 'Extraction complete. Nothing is reviewed yet — check each value against the document and mark it individually.',
+      });
+    } catch (e) {
+      setExtractionStatus('error');
+      setAlert({
+        tone: e instanceof VisaExtractionError && e.code === 'provider_quota' ? 'warning' : 'critical',
+        message:
+          e instanceof VisaExtractionError
+            ? e.message
+            : 'AI extraction could not be completed. Enter the Visa details manually or try again.',
+      });
+    }
+  }, [file]);
 
   /** Manual-entry path — used when extraction fails or the limit is exhausted. */
   const startManualEntry = useCallback(() => {
@@ -712,14 +760,6 @@ export default function VisaLoggerPage() {
               <span className="h-2 w-2 rounded-full bg-emerald-600" aria-hidden="true" />
               Database connected
             </span>
-            <span className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700">
-              <span
-                className={cn('h-2 w-2 rounded-full', GEMINI_STATUS[gemini.state].dot)}
-                aria-hidden="true"
-              />
-              Personal Gemini:{' '}
-              <span className="font-bold">{GEMINI_STATUS[gemini.state].label}</span>
-            </span>
           </div>
         }
       />
@@ -791,10 +831,6 @@ export default function VisaLoggerPage() {
                   Back to case details
                 </Button>
 
-                {/* AI availability affects the extraction path only. Operational
-                    details, hotels, dates and manual entry stay fully usable. */}
-                <PersonalGeminiBanner />
-
                 <UploadVisaCard
                   file={file}
                   onFileSelect={(f) => {
@@ -851,10 +887,12 @@ export default function VisaLoggerPage() {
                   </Panel>
                 )}
 
+                {/* The reason is already stated in the banner above; this only
+                    makes the two ways forward obvious next to the buttons. */}
                 {extractionStatus === 'error' && (
                   <Alert tone="critical" title="Extraction failed">
-                    The document could not be read. You can retry the extraction, or enter every value by hand
-                    and verify each one against the document.
+                    Nothing has been lost. Retry the extraction, or enter every value by hand and review each
+                    one against the document.
                   </Alert>
                 )}
 
@@ -862,9 +900,13 @@ export default function VisaLoggerPage() {
                   <p className="text-xs text-slate-600">
                     {isProcessing
                       ? EXTRACTION_STATUS_MESSAGES[extractionStatus]
-                      : VISA_CTA[gemini.state].note}
+                      : file
+                        ? 'Reading the document proposes values. Every one still has to be reviewed against it.'
+                        : 'Upload the issued visa to read it, or enter the details by hand.'}
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Manual entry sits beside extraction at every moment, not
+                        behind a failure. A record can always be completed. */}
                     <Button
                       variant="secondary"
                       onClick={startManualEntry}
@@ -873,23 +915,14 @@ export default function VisaLoggerPage() {
                     >
                       Enter details manually
                     </Button>
-                    {VISA_CTA[gemini.state].ready ? (
-                      <Button
-                        onClick={handleExtract}
-                        loading={isProcessing}
-                        disabled={!isReady}
-                        icon={<FileScan className="h-4 w-4" aria-hidden="true" />}
-                      >
-                        Extract visa information
-                      </Button>
-                    ) : (
-                      /* Not connected: the action routes to setup in the account
-                         rather than vanishing. Manual entry beside it is
-                         untouched, so a record can always be completed. */
-                      <ButtonLink to="/app/account" variant="secondary">
-                        {VISA_CTA[gemini.state].label}
-                      </ButtonLink>
-                    )}
+                    <Button
+                      onClick={handleExtract}
+                      loading={isProcessing}
+                      disabled={!isReady}
+                      icon={<FileScan className="h-4 w-4" aria-hidden="true" />}
+                    >
+                      Extract visa information
+                    </Button>
                   </div>
                 </div>
               </>
@@ -1068,8 +1101,6 @@ export default function VisaLoggerPage() {
             <ProcessingSummary
               details={details}
               file={file}
-              geminiStatus={GEMINI_STATUS[gemini.state].label}
-              geminiChip={GEMINI_STATUS[gemini.state].chip}
               currentStep={step}
               isReady={isReady}
               missingFields={missingFields}

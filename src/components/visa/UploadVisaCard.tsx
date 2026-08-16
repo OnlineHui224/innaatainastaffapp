@@ -248,19 +248,18 @@ export function UploadVisaCard({ file, onFileSelect, disabled, error }: UploadVi
           </div>
         )}
 
-        {/* AI Privacy Notice */}
+        {/* What actually happens to the document, stated plainly. Nothing here
+            claims a capability or a cost the application cannot verify. */}
         <div className="mt-4 flex items-start gap-2.5 rounded-md bg-slate-50 border border-slate-200 px-4 py-3">
           <ShieldCheck className="h-4 w-4 text-brand-500 shrink-0 mt-0.5" />
           <div className="text-xs text-slate-500 leading-relaxed">
             <p>
-              This document will be securely processed by the configured AI extraction service.
-              Extracted information must be reviewed before it is saved.
+              AI extraction is provided securely through HajjERP. The document is read on the
+              server and is not stored — only the identity values it yields are returned.
             </p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-medium text-slate-600">Daily AI request cost: 1 request</span>
-              <span className="text-slate-300">|</span>
-              <span>The API key is never exposed to the browser</span>
-            </div>
+            <p className="mt-1.5">
+              Everything read must still be reviewed against the document before it can be saved.
+            </p>
           </div>
         </div>
       </div>

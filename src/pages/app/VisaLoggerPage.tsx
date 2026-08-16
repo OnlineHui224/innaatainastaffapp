@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
+import { usePersonalGemini } from '@/context/personalGeminiStore';
 import { logAudit } from '@/lib/audit';
 import { formatDateTime } from '@/lib/priority';
 import { WorkflowStepper } from '@/components/visa/WorkflowStepper';
@@ -29,8 +30,9 @@ import { ProvenanceLadder, buildCaseProvenance } from '@/components/visa/Provena
 import { TransportSummary } from '@/components/visa/TransportSummary';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageHeader } from '@/components/PageHeader';
+import { PersonalGeminiBanner } from '@/components/gemini/PersonalGeminiBanner';
 import { Alert } from '@/components/ui/Alert';
-import { Button } from '@/components/ui/Button';
+import { Button, ButtonLink } from '@/components/ui/Button';
 import { Identifier } from '@/components/ui/Field';
 import { Panel } from '@/components/ui/Panel';
 import type { ComboboxOption } from '@/components/visa/SearchableCombobox';
@@ -52,10 +54,9 @@ import {
   unverifyField,
   verifyField,
 } from '@/types/visa';
+import { GEMINI_STATUS, VISA_CTA } from '@/types/personalGemini';
 import type { SubAgent } from '@/types';
 import { cn } from '@/lib/utils';
-
-const AI_DAILY_LIMIT = 30;
 
 function emptyDetails(): VisaCaseDetails {
   return {
@@ -95,6 +96,7 @@ function emptyExtraction(): VisaExtractionResult {
 export default function VisaLoggerPage() {
   const navigate = useNavigate();
   const { profile, isAdminOrHigher } = useAuth();
+  const gemini = usePersonalGemini();
 
   const isViewer = profile?.role === 'viewer';
 
@@ -126,9 +128,6 @@ export default function VisaLoggerPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
-
-  const aiRequestsUsed = 8;
-  const aiRequestsRemaining = AI_DAILY_LIMIT - aiRequestsUsed;
 
   useEffect(() => {
     async function loadInitial() {
@@ -302,10 +301,11 @@ export default function VisaLoggerPage() {
       setAlert({ tone: 'warning', message: 'Upload a visa document before starting extraction.' });
       return;
     }
-    if (aiRequestsRemaining <= 0) {
+    if (!gemini.ready) {
       setAlert({
-        tone: 'critical',
-        message: 'The daily AI extraction limit has been reached. Continue with manual entry, or try again tomorrow.',
+        tone: 'warning',
+        message:
+          'Your personal Gemini access is not available for extraction right now. You can continue with manual entry, or set up your access from My Account.',
       });
       return;
     }
@@ -379,7 +379,7 @@ export default function VisaLoggerPage() {
     setExtractionStatus('complete');
     setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
     setStep('review_extraction');
-  }, [file, aiRequestsRemaining, details]);
+  }, [file, gemini.ready, details]);
 
   /** Manual-entry path — used when extraction fails or the limit is exhausted. */
   const startManualEntry = useCallback(() => {
@@ -731,11 +731,12 @@ export default function VisaLoggerPage() {
               Database connected
             </span>
             <span className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700">
-              AI requests:{' '}
-              <span className="font-bold tabular-nums">
-                {aiRequestsRemaining} of {AI_DAILY_LIMIT}
-              </span>{' '}
-              left
+              <span
+                className={cn('h-2 w-2 rounded-full', GEMINI_STATUS[gemini.state].dot)}
+                aria-hidden="true"
+              />
+              Personal Gemini:{' '}
+              <span className="font-bold">{GEMINI_STATUS[gemini.state].label}</span>
             </span>
           </div>
         }
@@ -805,6 +806,10 @@ export default function VisaLoggerPage() {
                   Back to case details
                 </Button>
 
+                {/* AI availability affects the extraction path only. Operational
+                    details, hotels, dates and manual entry stay fully usable. */}
+                <PersonalGeminiBanner />
+
                 <UploadVisaCard
                   file={file}
                   onFileSelect={(f) => {
@@ -872,7 +877,7 @@ export default function VisaLoggerPage() {
                   <p className="text-xs text-slate-600">
                     {isProcessing
                       ? EXTRACTION_STATUS_MESSAGES[extractionStatus]
-                      : 'One AI request will be used for this extraction.'}
+                      : VISA_CTA[gemini.state].note}
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
@@ -883,14 +888,23 @@ export default function VisaLoggerPage() {
                     >
                       Enter details manually
                     </Button>
-                    <Button
-                      onClick={handleExtract}
-                      loading={isProcessing}
-                      disabled={!isReady || aiRequestsRemaining <= 0}
-                      icon={<FileScan className="h-4 w-4" aria-hidden="true" />}
-                    >
-                      Extract visa information
-                    </Button>
+                    {VISA_CTA[gemini.state].ready ? (
+                      <Button
+                        onClick={handleExtract}
+                        loading={isProcessing}
+                        disabled={!isReady}
+                        icon={<FileScan className="h-4 w-4" aria-hidden="true" />}
+                      >
+                        Extract visa information
+                      </Button>
+                    ) : (
+                      /* Not connected: the action routes to setup in the account
+                         rather than vanishing. Manual entry beside it is
+                         untouched, so a record can always be completed. */
+                      <ButtonLink to="/app/account" variant="secondary">
+                        {VISA_CTA[gemini.state].label}
+                      </ButtonLink>
+                    )}
                   </div>
                 </div>
               </>
@@ -1067,8 +1081,8 @@ export default function VisaLoggerPage() {
             <ProcessingSummary
               details={details}
               file={file}
-              aiRequestsRemaining={aiRequestsRemaining}
-              aiRequestsTotal={AI_DAILY_LIMIT}
+              geminiStatus={GEMINI_STATUS[gemini.state].label}
+              geminiChip={GEMINI_STATUS[gemini.state].chip}
               currentStep={step}
               isReady={isReady}
               missingFields={missingFields}

@@ -8,8 +8,9 @@ import {
   Plus,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { usePersonalGemini } from '@/context/personalGeminiStore';
 import { PageHeader } from '@/components/PageHeader';
-import { Button } from '@/components/ui/Button';
+import { Button, ButtonLink } from '@/components/ui/Button';
 import { ReadOnlyNotice } from '@/components/ui/Feedback';
 import { cn } from '@/lib/utils';
 import { FlightStepRail } from '@/components/flight/FlightStepRail';
@@ -21,6 +22,8 @@ import { TripDetailsForm } from '@/components/flight/TripDetailsForm';
 import { ConfirmationReview } from '@/components/flight/ConfirmationReview';
 import { GeneratedItinerary } from '@/components/flight/GeneratedItinerary';
 import { SideRailCard } from '@/components/flight/SideRailCard';
+import { PersonalGeminiBanner } from '@/components/gemini/PersonalGeminiBanner';
+import { FLIGHT_CTA } from '@/types/personalGemini';
 import {
   buildDemoExtraction,
   demoConfidenceLabel,
@@ -81,6 +84,7 @@ const nextId = (prefix: string) => `${prefix}${(uid += 1)}`;
  */
 export default function FlightDocumentOpsPage() {
   const { profile } = useAuth();
+  const gemini = usePersonalGemini();
   const isViewer = profile?.role === 'viewer';
 
   // Demonstration controls — which outcome the simulated extraction produces.
@@ -163,6 +167,9 @@ export default function FlightDocumentOpsPage() {
 
   // ── Extraction ──
   const runExtraction = useCallback(() => {
+    // Personal Gemini gates the AI-assisted step only. Uploads, corrections and
+    // everything already reviewed stay exactly where they are in every state.
+    if (!gemini.ready) return;
     if (readableDocs.length === 0) {
       setUploadError(true);
       return;
@@ -197,7 +204,7 @@ export default function FlightDocumentOpsPage() {
         return current + 1;
       });
     }, 820);
-  }, [readableDocs.length, scenario, sectorCount]);
+  }, [gemini.ready, readableDocs.length, scenario, sectorCount]);
 
   const runGeneration = useCallback(() => {
     setStage('generating');
@@ -439,6 +446,8 @@ export default function FlightDocumentOpsPage() {
       {stage === 'upload' && (
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
           <div className="flex min-w-0 flex-1 flex-col gap-4.5">
+            <PersonalGeminiBanner />
+
             <section>
               <h2 className={`${SECTION} mb-2.5`}>Source documents</h2>
               <DocumentUploadWorkspace
@@ -481,20 +490,33 @@ export default function FlightDocumentOpsPage() {
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-3.5">
-              <Button
-                size="lg"
-                icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
-                onClick={runExtraction}
-                className="min-h-[44px] border-navy-800 bg-navy-800 hover:border-navy-900 hover:bg-navy-900"
-              >
-                Extract Travel Information
-              </Button>
-              <span className="text-xs text-slate-600">
-                {readableDocs.length
-                  ? 'Nothing is saved until you review the result.'
-                  : 'Add a PDF, JPG or PNG to continue.'}
-              </span>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3.5">
+                {FLIGHT_CTA[gemini.state].ready ? (
+                  <Button
+                    size="lg"
+                    icon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
+                    onClick={runExtraction}
+                    className="min-h-[44px] border-navy-800 bg-navy-800 hover:border-navy-900 hover:bg-navy-900"
+                  >
+                    {FLIGHT_CTA[gemini.state].label}
+                  </Button>
+                ) : (
+                  /* Not connected: the action routes to setup in the account
+                     rather than disappearing, so staff always know what to do. */
+                  <ButtonLink to="/app/account" variant="secondary" size="lg" className="min-h-[44px]">
+                    {FLIGHT_CTA[gemini.state].label}
+                  </ButtonLink>
+                )}
+                {FLIGHT_CTA[gemini.state].ready && (
+                  <span className="text-xs text-slate-600">
+                    {readableDocs.length
+                      ? 'Nothing is saved until you review the result.'
+                      : 'Add a PDF, JPG or PNG to continue.'}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-600">{FLIGHT_CTA[gemini.state].note}</p>
             </div>
           </div>
 
@@ -534,8 +556,9 @@ export default function FlightDocumentOpsPage() {
 
               <SideRailCard title="AI processing">
                 <p className="text-[0.8125rem] leading-relaxed text-slate-600">
-                  Documents are read with your own Gemini access. Your usage stays separate from
-                  other staff accounts.
+                  {gemini.ready
+                    ? 'Documents are read with your own Gemini access. Your usage stays separate from other staff accounts.'
+                    : 'Your personal Gemini access is not available for document processing right now. Uploads and file management stay available.'}
                 </p>
               </SideRailCard>
             </>,
@@ -626,6 +649,8 @@ export default function FlightDocumentOpsPage() {
       {/* ── C · Journey review ── */}
       {stage === 'review' && summary && (
         <div className="flex flex-col gap-5">
+          <PersonalGeminiBanner />
+
           <div className="overflow-hidden rounded-lg border border-slate-300 bg-white">
             <div className="flex flex-wrap items-center justify-between gap-4.5 bg-navy-800 px-4.5 py-3.5">
               <div className="flex min-w-0 flex-wrap items-center gap-3.5">

@@ -18,8 +18,10 @@ import type { VisaCaseDetails, WorkflowStep } from '@/types/visa';
 interface ProcessingSummaryProps {
   details: VisaCaseDetails;
   file: File | null;
-  aiRequestsRemaining: number;
-  aiRequestsTotal: number;
+  /** Personal Gemini connection status label, e.g. "Connected". */
+  geminiStatus: string;
+  /** Tailwind chip classes for that status. */
+  geminiChip: string;
   currentStep: WorkflowStep;
   isReady: boolean;
   missingFields: string[];
@@ -73,13 +75,12 @@ function SectionLabel({ children }: { children: string }) {
 export function ProcessingSummary({
   details,
   file,
-  aiRequestsRemaining,
-  aiRequestsTotal,
+  geminiStatus,
+  geminiChip,
   currentStep,
   isReady,
   missingFields,
 }: ProcessingSummaryProps) {
-  const usagePercent = ((aiRequestsTotal - aiRequestsRemaining) / aiRequestsTotal) * 100;
 
   const transport = details.transport;
   const effectivePrice = transport.hasPriceOverride && transport.agreedPrice != null
@@ -144,26 +145,28 @@ export function ProcessingSummary({
         <Row icon={Calendar} label="Expected Return" value={details.expectedReturnDate} isSet={!!details.expectedReturnDate} />
         <Row icon={Upload} label="Uploaded File" value={file?.name || ''} isSet={!!file} />
 
-        {/* AI Usage */}
+        {/* Personal Gemini access.
+            There is deliberately no usage meter: HajjERP does not know a staff
+            member's remaining personal allowance, and inventing a figure would
+            assert something untrue. Availability is reported, not quantified. */}
         <div className="mt-3 pt-3 border-t border-slate-200">
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
               <Sparkles className="h-3.5 w-3.5 text-brand-500" />
-              <span className="text-xs font-semibold text-slate-600">AI Requests</span>
+              <span className="text-xs font-semibold text-slate-600">Personal Gemini</span>
             </div>
-            <span className="text-xs font-bold text-slate-700">
-              {aiRequestsRemaining} of {aiRequestsTotal} left
+            <span
+              className={cn(
+                'rounded border px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide',
+                geminiChip,
+              )}
+            >
+              {geminiStatus}
             </span>
           </div>
-          <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-            <div
-              className={cn(
-                'h-full rounded-full transition-colors',
-                usagePercent > 80 ? 'bg-amber-500' : 'bg-brand-600',
-              )}
-              style={{ width: `${usagePercent}%` }}
-            />
-          </div>
+          <p className="mt-1.5 text-2xs leading-snug text-slate-500">
+            Your own Google authorization. Usage is separate from other staff accounts.
+          </p>
         </div>
       </div>
 

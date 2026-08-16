@@ -125,6 +125,9 @@ const ROUTE_CRUMBS: Array<{ pattern: RegExp; crumbs: Crumb[] }> = [
 
   { pattern: /^\/app\/flight-document-ops$/, crumbs: [{ label: 'Flight Document Ops' }] },
 
+  /* Account surfaces are reached from the identity block, never the sidebar nav. */
+  { pattern: /^\/app\/account$/, crumbs: [{ label: 'My Account' }] },
+
   { pattern: /^\/app\/staff-users$/, crumbs: [{ label: 'Administration' }, { label: 'Staff Management' }] },
   { pattern: /^\/app\/audit-history$/, crumbs: [{ label: 'Administration' }, { label: 'Audit History' }] },
   {

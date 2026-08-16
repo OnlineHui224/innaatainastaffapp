@@ -24,6 +24,7 @@ import { Field, Input, SearchInput, Select } from '@/components/ui/Field';
 import { EmptyState, TableSkeleton } from '@/components/ui/Feedback';
 import { Modal } from '@/components/ui/Modal';
 import { RecordCard, TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
+import { StaffReadinessTable } from '@/components/gemini/StaffReadinessTable';
 import { RiskAction, RiskTierTag } from '@/components/admin/RiskTier';
 import { JOB_TITLE_SUGGESTIONS, ROLE_LABELS, type Profile, type UserRole } from '@/types';
 import {
@@ -584,6 +585,13 @@ export default function StaffUsersPage() {
           </div>
         </>
       )}
+
+      {/* ── Personal Gemini readiness ──────────────────────────────────
+          Status only. No credential is shown, and there is no action that
+          would let an administrator use another person's access. */}
+      <div className="mt-6">
+        <StaffReadinessTable />
+      </div>
 
       {/* ── Invite ─────────────────────────────────────────────────── */}
       <Modal

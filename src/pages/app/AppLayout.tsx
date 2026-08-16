@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut, Menu, X } from 'lucide-react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { LogOut, Menu, UserCog, X } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { LogoMark } from '@/components/Logo';
 import { Breadcrumbs } from '@/components/PageHeader';
@@ -118,10 +118,20 @@ export default function AppLayout() {
           </div>
         )}
       </div>
+      {/* Account surfaces are reached from the identity block, never from the
+          Operations navigation — Personal Gemini Access is supporting
+          infrastructure, not a business module. */}
+      <Link
+        to="/app/account"
+        className="mt-2 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-md border border-white/15 px-3 py-2 text-[0.8125rem] font-semibold text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+      >
+        <UserCog className="h-4 w-4" aria-hidden="true" />
+        My Account
+      </Link>
       <button
         type="button"
         onClick={handleSignOut}
-        className="mt-2 flex w-full items-center justify-center gap-2 rounded-md border border-white/15 px-3 py-2 text-[0.8125rem] font-semibold text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+        className="mt-2 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-md border border-white/15 px-3 py-2 text-[0.8125rem] font-semibold text-white/75 transition-colors hover:bg-white/10 hover:text-white"
       >
         <LogOut className="h-4 w-4" aria-hidden="true" />
         Sign out

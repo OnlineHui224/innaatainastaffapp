@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { PersonalGeminiProvider } from '@/context/PersonalGeminiContext';
 import { PasswordChangeModal } from '@/components/PasswordChangeModal';
 import LandingPage from '@/pages/LandingPage';
 import LoginPage from '@/pages/LoginPage';
@@ -18,6 +19,7 @@ import StaffUsersPage from '@/pages/app/StaffUsersPage';
 import AuditHistoryPage from '@/pages/app/AuditHistoryPage';
 import VisaLoggerPage from '@/pages/app/VisaLoggerPage';
 import FlightDocumentOpsPage from '@/pages/app/FlightDocumentOpsPage';
+import MyAccountPage from '@/pages/app/MyAccountPage';
 import HotelImportPage from '@/pages/app/HotelImportPage';
 import type { JSX } from 'react';
 
@@ -69,7 +71,10 @@ function EditorRoute({ children }: { children: JSX.Element }) {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      {/* UI-only shared state for the personal Gemini connection. Separate from
+          AuthContext: HajjERP/Supabase remains the only sign-in. */}
+      <PersonalGeminiProvider>
+        <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
@@ -152,6 +157,9 @@ export default function App() {
                 page itself, exactly as the Visa & Contract Logger does. No new
                 RBAC tier is introduced. */}
             <Route path="flight-document-ops" element={<FlightDocumentOpsPage />} />
+            {/* Personal Gemini Access lives in the staff member's own account,
+                deliberately not as an Operations module. */}
+            <Route path="account" element={<MyAccountPage />} />
             <Route
               path="hotel-import"
               element={
@@ -179,7 +187,8 @@ export default function App() {
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </BrowserRouter>
+        </BrowserRouter>
+      </PersonalGeminiProvider>
     </AuthProvider>
   );
 }

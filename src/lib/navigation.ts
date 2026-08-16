@@ -4,6 +4,7 @@ import {
   FileScan,
   Gauge,
   Hotel,
+  PlaneTakeoff,
   ScrollText,
   ShieldCheck,
   Users,
@@ -24,6 +25,12 @@ export const OPERATIONS_NAV: NavItem[] = [
   { to: '/app/pilgrims', label: 'Pilgrims', icon: Users, hint: 'Pilgrim directory and records' },
   { to: '/app/sub-agents', label: 'Sub-Agents', icon: Building2, hint: 'Responsibility by organisation' },
   { to: '/app/visa-logger', label: 'Visa & Contract Logger', icon: FileScan, hint: 'Visa extraction and review' },
+  {
+    to: '/app/flight-document-ops',
+    label: 'Flight Document Ops',
+    icon: PlaneTakeoff,
+    hint: 'Itinerary extraction and documents',
+  },
 ];
 
 export interface AdminNavItem extends NavItem {
@@ -115,6 +122,8 @@ const ROUTE_CRUMBS: Array<{ pattern: RegExp; crumbs: Crumb[] }> = [
   },
 
   { pattern: /^\/app\/visa-logger$/, crumbs: [{ label: 'Visa & Contract Logger' }] },
+
+  { pattern: /^\/app\/flight-document-ops$/, crumbs: [{ label: 'Flight Document Ops' }] },
 
   { pattern: /^\/app\/staff-users$/, crumbs: [{ label: 'Administration' }, { label: 'Staff Management' }] },
   { pattern: /^\/app\/audit-history$/, crumbs: [{ label: 'Administration' }, { label: 'Audit History' }] },

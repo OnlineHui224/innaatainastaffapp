@@ -17,6 +17,7 @@ import SubAgentFormPage from '@/pages/app/SubAgentFormPage';
 import StaffUsersPage from '@/pages/app/StaffUsersPage';
 import AuditHistoryPage from '@/pages/app/AuditHistoryPage';
 import VisaLoggerPage from '@/pages/app/VisaLoggerPage';
+import FlightDocumentOpsPage from '@/pages/app/FlightDocumentOpsPage';
 import HotelImportPage from '@/pages/app/HotelImportPage';
 import type { JSX } from 'react';
 
@@ -147,6 +148,10 @@ export default function App() {
               }
             />
             <Route path="visa-logger" element={<VisaLoggerPage />} />
+            {/* Viewers reach this route and receive a read-only surface from the
+                page itself, exactly as the Visa & Contract Logger does. No new
+                RBAC tier is introduced. */}
+            <Route path="flight-document-ops" element={<FlightDocumentOpsPage />} />
             <Route
               path="hotel-import"
               element={

@@ -1,0 +1,7 @@
+# Belt and braces. The repository root already ignores `*.local` and `.env`,
+# but this directory is the one place a real Google client secret will ever sit
+# on disk, so the rule is repeated locally where it is obvious to a reader.
+.env
+.env.local
+*.local
+!.env.local.example

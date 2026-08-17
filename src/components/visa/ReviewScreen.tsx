@@ -7,6 +7,7 @@ import {
   Flag,
   Hotel,
   PenLine,
+  Plane,
   ShieldCheck,
   User,
   Users,
@@ -161,12 +162,25 @@ export function ReviewScreen({
         description="The case information that will be saved alongside the reviewed visa values."
       >
         <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-          <SummaryRow icon={Users} label="Responsible agent" value={details.agentName} />
+          {/* A direct client has no Sub-Agent, so "Responsible agent — Not
+              selected" would read as a gap in the record rather than the
+              deliberate absence it is. */}
+          {details.clientSource === 'direct' ? (
+            <SummaryRow
+              icon={Users}
+              label="Responsibility"
+              value="Inna Ataina (direct client)"
+            />
+          ) : (
+            <SummaryRow icon={Users} label="Responsible agent" value={details.agentName} />
+          )}
           <SummaryRow icon={FileText} label="Visa company" value={details.visaCompany} />
           <SummaryRow icon={Hotel} label="Makkah hotel" value={details.makkahHotelName} />
           <SummaryRow icon={Hotel} label="Madinah hotel" value={details.madinahHotelName} />
           <SummaryRow icon={ShieldCheck} label="Planned outbound" value={details.plannedOutboundDate} />
           <SummaryRow icon={ShieldCheck} label="Expected return" value={details.expectedReturnDate} />
+          {/* A contract field the officer should see before confirming. */}
+          <SummaryRow icon={Plane} label="Arrival port" value={details.arrivalPort} />
         </dl>
 
         <div className="mt-5 border-t border-slate-200 pt-4">

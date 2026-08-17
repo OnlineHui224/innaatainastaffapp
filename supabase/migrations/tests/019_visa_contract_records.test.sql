@@ -39,21 +39,32 @@ EXCEPTION WHEN others THEN
   RETURN true;
 END $$;
 
-/** Review evidence for all four fields. */
-CREATE OR REPLACE FUNCTION full_review()
+/** Review evidence for all four fields, attributed to one officer. */
+CREATE OR REPLACE FUNCTION full_review(reviewer uuid DEFAULT '11111111-2222-3333-4444-555555555555')
 RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
   SELECT jsonb_build_object('fields', jsonb_object_agg(key, jsonb_build_object(
     'reviewed', true,
-    'reviewed_by', '11111111-2222-3333-4444-555555555555',
+    'reviewed_by', reviewer::text,
     'reviewed_at', '2026-08-17T10:00:00Z',
     'final_value', 'x'
   )))
   FROM unnest(ARRAY['passengerName','passportNumber','visaNumber','nationality']) AS key;
 $$;
 
+/** A complete identity, so review-evidence checks are tested in isolation. */
+CREATE OR REPLACE FUNCTION set_identity(target uuid) RETURNS void LANGUAGE sql AS $$
+  UPDATE visa_contract_records
+  SET traveller_name = 'Zainab T. Muhammad', passport_number = 'A01234567',
+      visa_number = 'V-55512', nationality = 'Nigerian'
+  WHERE id = target;
+$$;
+
 -- ── Fixtures ────────────────────────────────────────────────────────────────
 INSERT INTO profiles (id, full_name, email, role, is_active)
 VALUES ('11111111-2222-3333-4444-555555555555', 'QA Officer', 'qa@example.test', 'operations_staff', true);
+
+INSERT INTO profiles (id, full_name, email, role, is_active)
+VALUES ('22222222-3333-4444-5555-666666666666', 'Another Officer', 'other@example.test', 'operations_staff', true);
 
 INSERT INTO sub_agents (id, organisation_name, contact_person)
 VALUES ('7c9e6679-7425-40de-944b-e07fc1f90ae7', 'Some Agent Ltd', 'A Person');
@@ -136,11 +147,92 @@ SELECT assert(
   'the record stayed PENDING_REVIEW after every refused attempt');
 
 \echo ''
+\echo '=== B2. BLANK IDENTITY CANNOT BE CONFIRMED ==='
+-- Review evidence is present and correct; the values are not. A record with a
+-- blank passport number is not a usable liability record.
+
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = '11111111-2222-3333-4444-555555555555'
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
+$$, full_review()::text)), 'a fully reviewed but EMPTY identity cannot be confirmed');
+
+SELECT set_identity('aaaaaaaa-0000-4000-8000-00000000000a');
+
+UPDATE visa_contract_records SET passport_number = '   '
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a';
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = '11111111-2222-3333-4444-555555555555'
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
+$$, full_review()::text)), 'a whitespace-only passport number cannot be confirmed');
+
+UPDATE visa_contract_records SET passport_number = 'A01234567'
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a';
+UPDATE visa_contract_records SET nationality = NULL
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a';
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = '11111111-2222-3333-4444-555555555555'
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
+$$, full_review()::text)), 'a null nationality cannot be confirmed');
+SELECT set_identity('aaaaaaaa-0000-4000-8000-00000000000a');
+
+\echo ''
+\echo '=== B3. REVIEWER ATTRIBUTION MUST MATCH THE CONFIRMING OFFICER ==='
+-- RLS already forces updated_by = auth.uid(), so this ties the review evidence
+-- to the live session instead of accepting somebody else's id as the reviewer.
+
+SELECT assert(NOT visa_contract_reviewer_matches(full_review(), '22222222-3333-4444-5555-666666666666'),
+  'evidence naming another officer does not match this actor');
+SELECT assert(NOT visa_contract_reviewer_matches(full_review(), NULL),
+  'a NULL actor can attribute nothing');
+SELECT assert(visa_contract_reviewer_matches(full_review(), '11111111-2222-3333-4444-555555555555'),
+  'evidence naming the actor matches');
+
+SET ROLE authenticated;
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = '11111111-2222-3333-4444-555555555555'
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
+$$, full_review('22222222-3333-4444-5555-666666666666')::text)),
+  'a confirmation whose reviewer differs from updated_by is refused');
+
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = NULL
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
+$$, full_review()::text)), 'a confirmation with no actor at all is refused');
+
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = '11111111-2222-3333-4444-555555555555'
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
+$$, (SELECT jsonb_set(full_review(), '{fields,visaNumber,reviewed_by}',
+        to_jsonb('22222222-3333-4444-5555-666666666666'::text)))::text)),
+  'even ONE field reviewed by somebody else is refused');
+RESET ROLE;
+
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a') = 'PENDING_REVIEW',
+  'the record stayed PENDING_REVIEW through every attribution attempt');
+
+\echo ''
 \echo '=== C. CONFIRMATION SUCCEEDS WITH FOUR REVIEWED FIELDS ==='
 
+SET ROLE authenticated;
 UPDATE visa_contract_records
-SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = full_review()
+SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = full_review(),
+    updated_by = '11111111-2222-3333-4444-555555555555'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a';
+RESET ROLE;
 
 SELECT assert(
   (SELECT record_status FROM visa_contract_records
@@ -204,7 +296,8 @@ SET traveller_name = 'Zainab T. Muhammad', passport_number = 'A01234567',
     visa_number = 'V-55512', nationality = 'Nigerian'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000d';
 UPDATE visa_contract_records
-SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = full_review()
+SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = full_review(),
+    updated_by = '11111111-2222-3333-4444-555555555555'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000d';
 RESET ROLE;
 

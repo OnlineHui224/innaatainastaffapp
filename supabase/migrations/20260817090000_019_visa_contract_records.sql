@@ -229,6 +229,48 @@ AS $$
   ]) AS key;
 $$;
 
+/**
+ * Every identity value is actually present.
+ *
+ * Review evidence alone is not enough: a record confirmed with a blank passport
+ * number is not a usable liability record, and blank is exactly what arrives
+ * when a document could not be read. The officer must have typed something.
+ */
+CREATE OR REPLACE FUNCTION visa_contract_identity_complete(
+  traveller_name text, passport_number text, visa_number text, nationality text
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT COALESCE(btrim(traveller_name),  '') <> ''
+     AND COALESCE(btrim(passport_number), '') <> ''
+     AND COALESCE(btrim(visa_number),     '') <> ''
+     AND COALESCE(btrim(nationality),     '') <> '';
+$$;
+
+/**
+ * The reviewer named on every field is the person performing the confirmation.
+ *
+ * RLS already forces `updated_by = auth.uid()`, so this ties the review evidence
+ * to the live session rather than letting a client supply somebody else's id as
+ * the reviewer. A NULL actor can attribute nothing and is therefore refused.
+ */
+CREATE OR REPLACE FUNCTION visa_contract_reviewer_matches(metadata jsonb, actor uuid)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT actor IS NOT NULL
+     AND COALESCE(
+       bool_and((metadata #>> ARRAY['fields', key, 'reviewed_by']) = actor::text),
+       false
+     )
+  FROM unnest(ARRAY[
+    'passengerName', 'passportNumber', 'visaNumber', 'nationality'
+  ]) AS key;
+$$;
+
 -- ============================================================
 -- 4. Update guard
 -- ============================================================
@@ -266,11 +308,29 @@ BEGIN
   NEW.record_date     := OLD.record_date;
   NEW.updated_at      := now();
 
-  IF NEW.record_status = 'REVIEWED_CONFIRMED'
-     AND NOT visa_contract_review_complete(NEW.extraction_metadata) THEN
-    RAISE EXCEPTION
-      'visa_contract_records: all four identity fields must be individually reviewed before a record can be REVIEWED_CONFIRMED'
-      USING ERRCODE = 'check_violation';
+  IF NEW.record_status = 'REVIEWED_CONFIRMED' THEN
+    IF NOT visa_contract_identity_complete(
+         NEW.traveller_name, NEW.passport_number, NEW.visa_number, NEW.nationality) THEN
+      RAISE EXCEPTION
+        'visa_contract_records: traveller name, passport number, visa number and nationality must all be present before a record can be REVIEWED_CONFIRMED'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NOT visa_contract_review_complete(NEW.extraction_metadata) THEN
+      RAISE EXCEPTION
+        'visa_contract_records: all four identity fields must be individually reviewed before a record can be REVIEWED_CONFIRMED'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- The frontend path only. A server-side integration confirming a record has
+    -- no single reviewing officer to match against, and RLS does not apply to
+    -- it either; the two evidence checks above still hold for both.
+    IF NOT is_server
+       AND NOT visa_contract_reviewer_matches(NEW.extraction_metadata, NEW.updated_by) THEN
+      RAISE EXCEPTION
+        'visa_contract_records: every field must be reviewed by the staff member confirming the record'
+        USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
 
   IF NOT is_server THEN
@@ -301,9 +361,13 @@ SET search_path = public
 AS $$
 BEGIN
   IF NEW.record_status = 'REVIEWED_CONFIRMED'
-     AND NOT visa_contract_review_complete(NEW.extraction_metadata) THEN
+     AND NOT (
+       visa_contract_identity_complete(
+         NEW.traveller_name, NEW.passport_number, NEW.visa_number, NEW.nationality)
+       AND visa_contract_review_complete(NEW.extraction_metadata)
+     ) THEN
     RAISE EXCEPTION
-      'visa_contract_records: a record cannot be created as REVIEWED_CONFIRMED without review evidence'
+      'visa_contract_records: a record cannot be created as REVIEWED_CONFIRMED without a complete reviewed identity'
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;

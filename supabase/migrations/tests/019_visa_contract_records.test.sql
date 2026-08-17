@@ -51,6 +51,26 @@ RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
   FROM unnest(ARRAY['passengerName','passportNumber','visaNumber','nationality']) AS key;
 $$;
 
+/**
+ * Review evidence split across two officers — the normal multi-staff case.
+ * Name and passport by `first`, visa number and nationality by `second`.
+ */
+CREATE OR REPLACE FUNCTION split_review(first uuid, second uuid)
+RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_build_object('fields', jsonb_object_agg(entry.key, jsonb_build_object(
+    'reviewed', true,
+    'reviewed_by', entry.reviewer::text,
+    'reviewed_at', entry.at,
+    'final_value', 'x'
+  )))
+  FROM (VALUES
+    ('passengerName',  first,  '2026-08-17T10:12:00Z'),
+    ('passportNumber', first,  '2026-08-17T10:13:00Z'),
+    ('visaNumber',     second, '2026-08-17T10:31:00Z'),
+    ('nationality',    second, '2026-08-17T10:32:00Z')
+  ) AS entry(key, reviewer, at);
+$$;
+
 /** A complete identity, so review-evidence checks are tested in isolation. */
 CREATE OR REPLACE FUNCTION set_identity(target uuid) RETURNS void LANGUAGE sql AS $$
   UPDATE visa_contract_records
@@ -182,16 +202,25 @@ $$, full_review()::text)), 'a null nationality cannot be confirmed');
 SELECT set_identity('aaaaaaaa-0000-4000-8000-00000000000a');
 
 \echo ''
-\echo '=== B3. REVIEWER ATTRIBUTION MUST MATCH THE CONFIRMING OFFICER ==='
--- RLS already forces updated_by = auth.uid(), so this ties the review evidence
--- to the live session instead of accepting somebody else's id as the reviewer.
+\echo '=== B3. REVIEWER IDENTITY MUST BE GENUINE ==='
+-- Reviewers need NOT be the same person, and need not include the confirming
+-- officer. What they must be is real: fabricated identifiers are not evidence.
 
-SELECT assert(NOT visa_contract_reviewer_matches(full_review(), '22222222-3333-4444-5555-666666666666'),
-  'evidence naming another officer does not match this actor');
-SELECT assert(NOT visa_contract_reviewer_matches(full_review(), NULL),
-  'a NULL actor can attribute nothing');
-SELECT assert(visa_contract_reviewer_matches(full_review(), '11111111-2222-3333-4444-555555555555'),
-  'evidence naming the actor matches');
+SELECT assert(visa_contract_reviewers_valid(full_review()),
+  'a single real reviewer on all four fields is valid');
+SELECT assert(visa_contract_reviewers_valid(
+    split_review('11111111-2222-3333-4444-555555555555',
+                 '22222222-3333-4444-5555-666666666666')),
+  'two real reviewers across four fields are valid');
+SELECT assert(NOT visa_contract_reviewers_valid(
+    full_review('99999999-9999-4999-8999-999999999999')),
+  'a reviewer who is not a staff member is refused');
+SELECT assert(NOT visa_contract_reviewers_valid(
+    '{"fields":{"passengerName":{"reviewed":true,"reviewed_by":"not-a-uuid","reviewed_at":"t"},
+                "passportNumber":{"reviewed":true,"reviewed_by":"not-a-uuid","reviewed_at":"t"},
+                "visaNumber":{"reviewed":true,"reviewed_by":"not-a-uuid","reviewed_at":"t"},
+                "nationality":{"reviewed":true,"reviewed_by":"not-a-uuid","reviewed_at":"t"}}}'::jsonb),
+  'a malformed reviewer identifier is refused, not raised as a cast error');
 
 SET ROLE authenticated;
 SELECT assert(raises(format($$
@@ -199,33 +228,26 @@ SELECT assert(raises(format($$
   SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
       updated_by = '11111111-2222-3333-4444-555555555555'
   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
-$$, full_review('22222222-3333-4444-5555-666666666666')::text)),
-  'a confirmation whose reviewer differs from updated_by is refused');
+$$, full_review('99999999-9999-4999-8999-999999999999')::text)),
+  'a confirmation citing a fabricated reviewer is refused');
 
-SELECT assert(raises(format($$
-  UPDATE visa_contract_records
-  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
-      updated_by = NULL
-  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
-$$, full_review()::text)), 'a confirmation with no actor at all is refused');
-
+-- 4. One field has no reviewer at all.
 SELECT assert(raises(format($$
   UPDATE visa_contract_records
   SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
       updated_by = '11111111-2222-3333-4444-555555555555'
   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
-$$, (SELECT jsonb_set(full_review(), '{fields,visaNumber,reviewed_by}',
-        to_jsonb('22222222-3333-4444-5555-666666666666'::text)))::text)),
-  'even ONE field reviewed by somebody else is refused');
+$$, (SELECT full_review()::jsonb #- '{fields,visaNumber,reviewed_by}')::text)),
+  'a field with no reviewer is refused');
 RESET ROLE;
 
 SELECT assert(
   (SELECT record_status FROM visa_contract_records
    WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a') = 'PENDING_REVIEW',
-  'the record stayed PENDING_REVIEW through every attribution attempt');
+  'the record stayed PENDING_REVIEW through every invalid-reviewer attempt');
 
 \echo ''
-\echo '=== C. CONFIRMATION SUCCEEDS WITH FOUR REVIEWED FIELDS ==='
+\echo '=== C. CONFIRMATION SUCCEEDS — ONE OFFICER ==='
 
 SET ROLE authenticated;
 UPDATE visa_contract_records
@@ -253,6 +275,78 @@ SELECT assert(raises($$
   INSERT INTO visa_contract_records (client_source, sub_agent_id, entry_source, client_case_key, record_status)
   VALUES ('direct', NULL, 'MANUAL', gen_random_uuid(), 'REVIEWED_CONFIRMED')
 $$), 'a record cannot be created already confirmed without evidence');
+
+\echo ''
+\echo '=== C2. CONFIRMATION SUCCEEDS — TWO OFFICERS, EITHER MAY CONFIRM ==='
+-- Musa reads the name and passport; Ibrahim reads the visa number and
+-- nationality; Ibrahim confirms. Each person's individual responsibility is
+-- preserved, and the confirming officer is recorded separately.
+
+INSERT INTO visa_contract_records (id, client_source, sub_agent_id, entry_source, client_case_key,
+  traveller_name, passport_number, visa_number, nationality)
+VALUES ('aaaaaaaa-0000-4000-8000-00000000000c', 'sub_agent',
+        '7c9e6679-7425-40de-944b-e07fc1f90ae7', 'GEMINI', gen_random_uuid(),
+        'Zainab T. Muhammad', 'A01234567', 'V-55512', 'Nigerian');
+
+SET ROLE authenticated;
+UPDATE visa_contract_records
+SET record_status = 'REVIEWED_CONFIRMED',
+    extraction_metadata = split_review('11111111-2222-3333-4444-555555555555',
+                                       '22222222-3333-4444-5555-666666666666'),
+    updated_by = '22222222-3333-4444-5555-666666666666'
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c';
+RESET ROLE;
+
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c') = 'REVIEWED_CONFIRMED',
+  'four fields reviewed across TWO officers confirms');
+
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
+    = '11111111-2222-3333-4444-555555555555',
+  'the first officer remains recorded on the fields they reviewed');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,nationality,reviewed_by}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
+    = '22222222-3333-4444-5555-666666666666',
+  'the second officer remains recorded on theirs');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_at}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
+    = '2026-08-17T10:12:00Z',
+  'each field keeps its own review timestamp');
+SELECT assert(
+  (SELECT updated_by FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
+    = '22222222-3333-4444-5555-666666666666',
+  'final confirmation is attributed to the officer who confirmed');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
+    <> (SELECT updated_by::text FROM visa_contract_records
+        WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c'),
+  'the confirmer legitimately differs from a field reviewer, and both survive');
+
+-- The other officer may equally confirm a record they only partly reviewed.
+INSERT INTO visa_contract_records (id, client_source, sub_agent_id, entry_source, client_case_key,
+  traveller_name, passport_number, visa_number, nationality)
+VALUES ('aaaaaaaa-0000-4000-8000-00000000000e', 'sub_agent',
+        '7c9e6679-7425-40de-944b-e07fc1f90ae7', 'GEMINI', gen_random_uuid(),
+        'Habib Yaru', 'B09876543', 'V-11111', 'Nigerian');
+SET ROLE authenticated;
+UPDATE visa_contract_records
+SET record_status = 'REVIEWED_CONFIRMED',
+    extraction_metadata = split_review('11111111-2222-3333-4444-555555555555',
+                                       '22222222-3333-4444-5555-666666666666'),
+    updated_by = '11111111-2222-3333-4444-555555555555'
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000e';
+RESET ROLE;
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000e') = 'REVIEWED_CONFIRMED',
+  'either reviewing officer may perform the final confirmation');
 
 \echo ''
 \echo '=== D. SPREADSHEET PROVENANCE CANNOT BE FORGED ==='

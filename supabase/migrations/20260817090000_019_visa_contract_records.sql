@@ -250,22 +250,41 @@ AS $$
 $$;
 
 /**
- * The reviewer named on every field is the person performing the confirmation.
+ * Every reviewer named in the evidence is a real member of staff.
  *
- * RLS already forces `updated_by = auth.uid()`, so this ties the review evidence
- * to the live session rather than letting a client supply somebody else's id as
- * the reviewer. A NULL actor can attribute nothing and is therefore refused.
+ * Different officers may review different fields — one person reads the name and
+ * passport, a colleague reads the visa number and nationality, and either may
+ * perform the final confirmation. That is normal in a staffed operation, and the
+ * evidence preserves each person's individual responsibility.
+ *
+ * What is NOT permitted is a fabricated reviewer. Each `reviewed_by` must
+ * resolve to an existing `profiles` row, so review evidence cannot be
+ * manufactured by inventing an identifier.
+ *
+ * Two deliberate choices:
+ *   - Compared as text rather than cast to uuid, so a malformed value fails the
+ *     check instead of raising a cast error.
+ *   - Existence only, not `is_active`. An officer who reviewed a field and has
+ *     since left the company still reviewed it; invalidating their past work
+ *     would rewrite history rather than protect it.
+ *
+ * SECURITY DEFINER because the calling trigger runs as the invoker, and a
+ * browser role may not be able to see another officer's profile row. It returns
+ * a single boolean and discloses nothing further.
  */
-CREATE OR REPLACE FUNCTION visa_contract_reviewer_matches(metadata jsonb, actor uuid)
+CREATE OR REPLACE FUNCTION visa_contract_reviewers_valid(metadata jsonb)
 RETURNS boolean
 LANGUAGE sql
-IMMUTABLE
+STABLE
+SECURITY DEFINER SET search_path = public
 AS $$
-  SELECT actor IS NOT NULL
-     AND COALESCE(
-       bool_and((metadata #>> ARRAY['fields', key, 'reviewed_by']) = actor::text),
-       false
-     )
+  SELECT COALESCE(
+    bool_and(EXISTS (
+      SELECT 1 FROM profiles p
+      WHERE p.id::text = metadata #>> ARRAY['fields', key, 'reviewed_by']
+    )),
+    false
+  )
   FROM unnest(ARRAY[
     'passengerName', 'passportNumber', 'visaNumber', 'nationality'
   ]) AS key;
@@ -322,13 +341,15 @@ BEGIN
         USING ERRCODE = 'check_violation';
     END IF;
 
-    -- The frontend path only. A server-side integration confirming a record has
-    -- no single reviewing officer to match against, and RLS does not apply to
-    -- it either; the two evidence checks above still hold for both.
-    IF NOT is_server
-       AND NOT visa_contract_reviewer_matches(NEW.extraction_metadata, NEW.updated_by) THEN
+    -- Each named reviewer must be a real member of staff. The reviewers need NOT
+    -- be the same person, and need not include the confirming officer: who
+    -- reviewed each field lives in `extraction_metadata`, while who performed the
+    -- final confirmation is `updated_by` (which RLS pins to auth.uid()) plus the
+    -- `visa_contract_review_confirmed` audit entry. Both accountabilities are
+    -- recorded, separately.
+    IF NOT visa_contract_reviewers_valid(NEW.extraction_metadata) THEN
       RAISE EXCEPTION
-        'visa_contract_records: every field must be reviewed by the staff member confirming the record'
+        'visa_contract_records: every field review must name a genuine staff member'
         USING ERRCODE = 'check_violation';
     END IF;
   END IF;
@@ -365,6 +386,7 @@ BEGIN
        visa_contract_identity_complete(
          NEW.traveller_name, NEW.passport_number, NEW.visa_number, NEW.nationality)
        AND visa_contract_review_complete(NEW.extraction_metadata)
+       AND visa_contract_reviewers_valid(NEW.extraction_metadata)
      ) THEN
     RAISE EXCEPTION
       'visa_contract_records: a record cannot be created as REVIEWED_CONFIRMED without a complete reviewed identity'

@@ -14,28 +14,43 @@ import {
 } from "./validation.ts";
 
 /**
- * VISA IDENTITY EXTRACTION — server-side Gemini
- * =============================================
+ * VISA IDENTITY EXTRACTION + LIABILITY RECORD CREATION
+ * ====================================================
  *
- * Reads an uploaded visa document and returns four identity values for a staff
- * member to review. This is the ONLY place a Gemini call is made: the browser
- * never talks to Google, and never sees the company API key.
+ * Reads an uploaded visa document and, in the same operation, creates the Visa
+ * & Contract record that carries the company's responsibility for it. This is
+ * the ONLY place a Gemini call is made — the browser never talks to Google and
+ * never sees the company API key — and the ONLY place a register record is
+ * created, because `entry_source` and `created_by` are provenance claims a
+ * client must not be able to forge. RLS grants no INSERT to `authenticated`.
  *
- * WHAT THIS FUNCTION DOES NOT DO
- * ------------------------------
- *   - It writes nothing. Not to `pilgrims`, not anywhere. It is a pure
- *     read-and-return, so a bad extraction cannot corrupt a record.
- *   - It does not store the document. One request, one response, discarded —
- *     no Supabase Storage, no Gemini Files API, no database row.
- *   - It does not decide anything. Every value it returns is unreviewed, and
- *     the existing per-field human review remains the only path to a save.
+ * WHAT IT WRITES
+ * --------------
+ *   - Exactly one `visa_contract_records` row per visa case, at
+ *     PENDING_REVIEW / PENDING_PILGRIM_MATCH / NOT_SYNCED.
+ *   - One `audit_log` entry for that creation, attributed to the staff member
+ *     resolved from the verified JWT — never to a caller-supplied id.
+ *
+ * Creation is idempotent on `client_case_key`: a retried extraction returns the
+ * existing record untouched and writes no second audit entry, so the liability
+ * trail can never be double-counted, reset, or overwritten.
+ *
+ * WHAT IT DOES NOT DO
+ * -------------------
+ *   - It never stores the document. One request, one response, discarded — no
+ *     Supabase Storage, no Gemini Files API, no document bytes in any column.
+ *   - It never touches `pilgrims`. Linking a traveller is a separate, explicit
+ *     staff action, and no pilgrim is created here or anywhere in this flow.
+ *   - It never decides anything about the identity. Every value it writes is
+ *     unreviewed, and the per-field human review remains the only route to a
+ *     confirmed record — enforced in the database, not just in the UI.
  *
  * WHAT IT REFUSES TO DO
  * ---------------------
  * It never invents an identifier. A passport or visa number that cannot be read
- * confidently comes back `null`, because a plausible-looking fabricated passport
- * number in an operational record is far worse than a blank one an officer has
- * to type.
+ * confidently is stored as `null`, because a plausible-looking fabricated
+ * passport number in a liability record is far worse than a blank one an officer
+ * has to type.
  */
 
 /* ── CORS ─────────────────────────────────────────────────────────────────────
@@ -351,12 +366,61 @@ type PersistOutcome =
  * never reset a reviewed record to pending, overwrite a staff correction, or
  * duplicate the company's liability trail. Nothing here ever UPDATEs.
  */
+/**
+ * Writes the central Audit History entry for a newly created record.
+ *
+ * The actor is the staff member resolved from the verified JWT, never anything
+ * the caller supplied. Best effort: a failed audit write must not undo a
+ * created liability record, but it is logged loudly because a silent gap in the
+ * audit trail is its own problem.
+ *
+ * Nothing sensitive is recorded — no document bytes, no base64, no provider
+ * response, no API key. Only what the record already is.
+ */
+async function auditRecordCreated(
+  record: Record<string, unknown>,
+  actor: { id: string; name: string },
+): Promise<void> {
+  const { error } = await adminClient.from("audit_log").insert({
+    action: "visa_contract_record_created",
+    record_type: "visa_contract_record",
+    record_id: record.id,
+    record_label: (record.traveller_name as string | null) ||
+      (record.source_filename as string | null) ||
+      "Visa case",
+    previous_value: null,
+    new_value: {
+      entry_source: record.entry_source,
+      record_status: record.record_status,
+      pilgrim_match_status: record.pilgrim_match_status,
+      client_source: record.client_source,
+      sub_agent_id: record.sub_agent_id,
+      agent_name_snapshot: record.agent_name_snapshot,
+      extraction_model: record.extraction_model,
+      source_mime_type: record.source_mime_type,
+    },
+    performed_by: actor.id,
+    performed_by_name: actor.name,
+  });
+
+  if (error) {
+    console.error(
+      JSON.stringify({
+        event: "visa_record_audit_failed",
+        record_id: record.id,
+        code: error.code ?? null,
+      }),
+    );
+  }
+}
+
 async function persistRecord(args: {
   caseKey: string;
   details: OperationalDetails;
   entrySource: "GEMINI" | "MANUAL";
   fields: ExtractionFields | null;
   userId: string;
+  userName: string;
   sourceFilename: string | null;
   sourceMimeType: string | null;
   extractedAt: string | null;
@@ -369,6 +433,8 @@ async function persistRecord(args: {
     .maybeSingle();
 
   if (existing.data) {
+    /* Idempotent hit. No audit entry: nothing happened, and a second
+       "created" row would misreport the liability trail. */
     return { ok: true, record: existing.data, reused: true };
   }
 
@@ -478,6 +544,7 @@ async function persistRecord(args: {
     };
   }
 
+  await auditRecordCreated(insert.data, { id: args.userId, name: args.userName });
   return { ok: true, record: insert.data, reused: false };
 }
 
@@ -520,7 +587,7 @@ Deno.serve(async (req: Request) => {
           quota. */
   const { data: profile, error: profileError } = await adminClient
     .from("profiles")
-    .select("is_active, role")
+    .select("is_active, role, full_name")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -552,6 +619,10 @@ Deno.serve(async (req: Request) => {
       origin,
     );
   }
+
+  /* The audit trail names a person, not a uuid. Taken from the profile the JWT
+     resolved to — never from anything the caller sent. */
+  const actorName = (profile.full_name as string | null) ?? "";
 
   /* 3 ── Body. The declared length is checked first, so an oversized payload is
           refused rather than buffered. */
@@ -604,6 +675,7 @@ Deno.serve(async (req: Request) => {
       entrySource,
       fields,
       userId: user.id,
+      userName: actorName,
       sourceFilename: typeof body.sourceFilename === "string"
         ? body.sourceFilename.slice(0, 260)
         : null,
@@ -688,6 +760,7 @@ Deno.serve(async (req: Request) => {
     entrySource: "GEMINI",
     fields: outcome.fields,
     userId: user.id,
+    userName: actorName,
     sourceFilename: validated.body.sourceFilename,
     sourceMimeType: validated.body.mimeType,
     extractedAt,

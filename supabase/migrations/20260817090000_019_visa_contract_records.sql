@@ -95,7 +95,13 @@ CREATE TABLE IF NOT EXISTS visa_contract_records (
   -- Sub-Agent is invented to represent the company itself.
   client_source text NOT NULL DEFAULT 'sub_agent'
     CHECK (client_source IN ('direct', 'sub_agent')),
-  sub_agent_id uuid REFERENCES sub_agents(id) ON DELETE SET NULL,
+  -- RESTRICT, not SET NULL. `SET NULL` would contradict the responsibility
+  -- CHECK below — deleting a Sub-Agent would try to leave a sub_agent client
+  -- with no Sub-Agent — but more importantly, historical responsibility for an
+  -- issued visa must survive. A Sub-Agent holding visa liability cannot be
+  -- deleted out from under it; deactivate them with `sub_agents.active_status`
+  -- instead.
+  sub_agent_id uuid REFERENCES sub_agents(id) ON DELETE RESTRICT,
   -- Name as it stood when the visa was issued. Kept even if the Sub-Agent is
   -- later renamed or deleted, because the liability trail must stay readable.
   agent_name_snapshot text NOT NULL DEFAULT '',
@@ -195,18 +201,62 @@ CREATE INDEX IF NOT EXISTS vcr_sync_idx         ON visa_contract_records (spread
 CREATE INDEX IF NOT EXISTS vcr_pilgrim_idx      ON visa_contract_records (pilgrim_id);
 
 -- ============================================================
--- 3. Immutable provenance
+-- 3. Review completeness
 -- ============================================================
--- The columns that say who created the record, when, from what source and for
--- which case are the backbone of the liability trail. An UPDATE must not be
--- able to rewrite them, so the trigger restores them rather than trusting the
--- statement. `updated_at` is stamped here so it cannot be back-dated either.
+-- What counts as evidence that a field was actually reviewed by a person:
+-- the flag, a reviewer, and a time. All three, for all four fields.
+--
+-- This is deliberately a plain predicate rather than a state machine. The rule
+-- it encodes is the one the whole module exists to protect — a visa identity is
+-- confirmed because somebody checked each value against the document, never
+-- because a client said so.
 
+CREATE OR REPLACE FUNCTION visa_contract_review_complete(metadata jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT COALESCE(
+    bool_and(
+      (metadata #>> ARRAY['fields', key, 'reviewed']) = 'true'
+      AND COALESCE(metadata #>> ARRAY['fields', key, 'reviewed_by'], '') <> ''
+      AND COALESCE(metadata #>> ARRAY['fields', key, 'reviewed_at'], '') <> ''
+    ),
+    false
+  )
+  FROM unnest(ARRAY[
+    'passengerName', 'passportNumber', 'visaNumber', 'nationality'
+  ]) AS key;
+$$;
+
+-- ============================================================
+-- 4. Update guard
+-- ============================================================
+-- Three jobs, all of them things the client must not be trusted with.
+--
+--   1. Provenance columns are restored, not trusted. Who created the record,
+--      when, from what source and for which case is the backbone of the
+--      liability trail.
+--   2. REVIEWED_CONFIRMED is refused without review evidence, so an
+--      authenticated browser calling PostgREST directly cannot skip the review
+--      workflow by simply sending the status.
+--   3. Spreadsheet synchronisation columns are restored for anyone other than
+--      the server. Google sync does not exist yet in M1; when it arrives in M2
+--      it will run server-side, and until then nothing may claim a record was
+--      SYNCED.
+
+-- SECURITY INVOKER on purpose. The function needs no elevated rights — it only
+-- rewrites NEW — and under SECURITY DEFINER `current_user` would be the owner,
+-- so the guard could never tell a browser apart from the server.
 CREATE OR REPLACE FUNCTION visa_contract_records_guard()
 RETURNS trigger
 LANGUAGE plpgsql
-SECURITY DEFINER SET search_path = public
+SET search_path = public
 AS $$
+DECLARE
+  -- PostgREST switches the database role per request, so this distinguishes a
+  -- service-role Edge Function call from an ordinary authenticated browser.
+  is_server boolean := current_user IN ('service_role', 'postgres', 'supabase_admin');
 BEGIN
   NEW.id              := OLD.id;
   NEW.client_case_key := OLD.client_case_key;
@@ -215,6 +265,23 @@ BEGIN
   NEW.created_at      := OLD.created_at;
   NEW.record_date     := OLD.record_date;
   NEW.updated_at      := now();
+
+  IF NEW.record_status = 'REVIEWED_CONFIRMED'
+     AND NOT visa_contract_review_complete(NEW.extraction_metadata) THEN
+    RAISE EXCEPTION
+      'visa_contract_records: all four identity fields must be individually reviewed before a record can be REVIEWED_CONFIRMED'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF NOT is_server THEN
+    NEW.spreadsheet_sync_status := OLD.spreadsheet_sync_status;
+    NEW.spreadsheet_id          := OLD.spreadsheet_id;
+    NEW.spreadsheet_tab         := OLD.spreadsheet_tab;
+    NEW.spreadsheet_row_ref     := OLD.spreadsheet_row_ref;
+    NEW.last_synced_at          := OLD.last_synced_at;
+    NEW.sync_error              := OLD.sync_error;
+  END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -224,8 +291,32 @@ CREATE TRIGGER visa_contract_records_guard_trg
   BEFORE UPDATE ON visa_contract_records
   FOR EACH ROW EXECUTE FUNCTION visa_contract_records_guard();
 
+-- The same rule on the way in. Records are only created server-side today and
+-- always start PENDING_REVIEW, so this should never fire — which is exactly why
+-- it is cheap to keep.
+CREATE OR REPLACE FUNCTION visa_contract_records_insert_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.record_status = 'REVIEWED_CONFIRMED'
+     AND NOT visa_contract_review_complete(NEW.extraction_metadata) THEN
+    RAISE EXCEPTION
+      'visa_contract_records: a record cannot be created as REVIEWED_CONFIRMED without review evidence'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS visa_contract_records_insert_guard_trg ON visa_contract_records;
+CREATE TRIGGER visa_contract_records_insert_guard_trg
+  BEFORE INSERT ON visa_contract_records
+  FOR EACH ROW EXECUTE FUNCTION visa_contract_records_insert_guard();
+
 -- ============================================================
--- 4. Row level security
+-- 5. Row level security
 -- ============================================================
 
 ALTER TABLE visa_contract_records ENABLE ROW LEVEL SECURITY;

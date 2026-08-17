@@ -353,12 +353,22 @@ export default function VisaLoggerPage() {
       if (record?.record_status === 'REVIEWED_CONFIRMED' && profile?.id && next) {
         const edited = next;
         void revertRecordToPending(record, edited, profile.id)
-          .then((updated) => {
+          .then(async (updated) => {
             setRecord(updated);
             setAlert({
               tone: 'warning',
               message:
                 'This value changed, so the record has returned to Pending Review. Review all four values again to confirm it.',
+            });
+            await logAudit({
+              action: 'visa_contract_review_reopened',
+              recordType: 'visa_contract_record',
+              recordId: updated.id,
+              recordLabel: updated.traveller_name || updated.passport_number || 'Visa case',
+              previousValue: { record_status: 'REVIEWED_CONFIRMED' },
+              newValue: { record_status: 'PENDING_REVIEW', reopened_field: key },
+              performedBy: profile.id,
+              performedByName: profile.full_name ?? '',
             });
           })
           .catch(() => {
@@ -369,7 +379,7 @@ export default function VisaLoggerPage() {
           });
       }
     },
-    [record, profile?.id],
+    [record, profile?.id, profile?.full_name],
   );
 
   /** The only route to a verified field. Officer and timestamp come from the session. */
@@ -466,22 +476,9 @@ export default function VisaLoggerPage() {
       setRecord(result.record);
       setPersistFailed(result.record === null);
 
-      if (result.record) {
-        await logAudit({
-          action: result.reused ? 'visa_record_reused' : 'visa_record_created',
-          recordType: 'visa_contract_record',
-          recordId: result.record.id,
-          recordLabel: result.record.traveller_name || file.name,
-          newValue: {
-            entry_source: 'GEMINI',
-            record_status: result.record.record_status,
-            model: result.model,
-            client_source: result.record.client_source,
-          },
-          performedBy: profile?.id ?? null,
-          performedByName: profile?.full_name ?? '',
-        });
-      }
+      /* The creation audit entry is written server-side, where the actor comes
+         from the verified JWT rather than from this browser — and where an
+         idempotent hit writes nothing at all. */
 
       const unread = Object.values(result.fields).filter((f) => f.value === null).length;
 
@@ -510,7 +507,7 @@ export default function VisaLoggerPage() {
             : 'AI extraction could not be completed. Enter the Visa details manually or try again.',
       });
     }
-  }, [file, caseKey, details, profile?.id, profile?.full_name]);
+  }, [file, caseKey, details]);
 
   /**
    * Writes the record for a case whose extraction succeeded but whose first
@@ -552,16 +549,8 @@ export default function VisaLoggerPage() {
       });
       setRecord(saved.record);
       setPersistFailed(false);
+      /* Audited server-side, once, on the insert that actually happened. */
       setAlert({ tone: 'success', message: 'Visa case saved to HajjERP.' });
-      await logAudit({
-        action: 'visa_record_created',
-        recordType: 'visa_contract_record',
-        recordId: saved.record.id,
-        recordLabel: saved.record.traveller_name || file.name,
-        newValue: { entry_source: 'GEMINI', persisted_via: 'retry' },
-        performedBy: profile?.id ?? null,
-        performedByName: profile?.full_name ?? '',
-      });
     } catch (e) {
       setAlert({
         tone: 'critical',
@@ -573,7 +562,7 @@ export default function VisaLoggerPage() {
     } finally {
       setRetrying(false);
     }
-  }, [file, caseKey, details, extraction, profile?.id, profile?.full_name]);
+  }, [file, caseKey, details, extraction]);
 
   /**
    * Manual-entry path — used whenever extraction is unavailable or refused.
@@ -610,15 +599,6 @@ export default function VisaLoggerPage() {
         message:
           'Manual entry. The Visa case is recorded — type each value from the document, then review it explicitly.',
       });
-      await logAudit({
-        action: saved.reused ? 'visa_record_reused' : 'visa_record_created',
-        recordType: 'visa_contract_record',
-        recordId: saved.record.id,
-        recordLabel: saved.record.traveller_name || file?.name || 'Manual visa case',
-        newValue: { entry_source: 'MANUAL', record_status: saved.record.record_status },
-        performedBy: profile?.id ?? null,
-        performedByName: profile?.full_name ?? '',
-      });
     } catch (e) {
       setPersistFailed(true);
       setAlert({
@@ -629,7 +609,7 @@ export default function VisaLoggerPage() {
             : 'This Visa case is not yet saved to HajjERP. Retry saving.',
       });
     }
-  }, [caseKey, details, file, profile?.id, profile?.full_name]);
+  }, [caseKey, details, file]);
 
   /** Retry for a manual case whose first write failed. No document is involved. */
   const retryManualPersist = useCallback(async () => {
@@ -731,11 +711,19 @@ export default function VisaLoggerPage() {
       try {
         setRecord(await linkPilgrim(record.id, candidate.id, profile.id));
         await logAudit({
-          action: 'visa_record_pilgrim_linked',
+          action: 'visa_contract_pilgrim_linked',
           recordType: 'visa_contract_record',
           recordId: record.id,
           recordLabel: candidate.full_name,
-          newValue: { pilgrim_id: candidate.id, pilgrim_match_status: 'MATCHED' },
+          previousValue: {
+            pilgrim_id: record.pilgrim_id,
+            pilgrim_match_status: record.pilgrim_match_status,
+          },
+          newValue: {
+            pilgrim_id: candidate.id,
+            pilgrim_match_status: 'MATCHED',
+            matched_on_passport: candidate.passport_number,
+          },
           performedBy: profile.id,
           performedByName: profile.full_name ?? '',
         });
@@ -762,14 +750,25 @@ export default function VisaLoggerPage() {
 
     if (!record || !profile?.id || record.pilgrim_match_status !== 'MATCHED') return;
     try {
-      setRecord(await unlinkPilgrim(record.id, profile.id));
+      const updated = await unlinkPilgrim(record.id, profile.id);
+      setRecord(updated);
+      await logAudit({
+        action: 'visa_contract_pilgrim_unlinked',
+        recordType: 'visa_contract_record',
+        recordId: updated.id,
+        recordLabel: updated.traveller_name || updated.passport_number || 'Visa case',
+        previousValue: { pilgrim_id: record.pilgrim_id, pilgrim_match_status: 'MATCHED' },
+        newValue: { pilgrim_id: null, pilgrim_match_status: 'PENDING_PILGRIM_MATCH' },
+        performedBy: profile.id,
+        performedByName: profile.full_name ?? '',
+      });
     } catch {
       setAlert({
         tone: 'critical',
         message: 'The pilgrim link could not be removed. Try again.',
       });
     }
-  }, [record, profile?.id]);
+  }, [record, profile?.id, profile?.full_name]);
 
   /**
    * Advances to confirmation.
@@ -948,7 +947,7 @@ export default function VisaLoggerPage() {
       /* The verification trail travels with the audit entry too, so who reviewed
          which value — and when — is recoverable after the fact. */
       await logAudit({
-        action: 'visa_record_confirmed',
+        action: 'visa_contract_review_confirmed',
         recordType: 'visa_contract_record',
         recordId: confirmed.id,
         recordLabel: confirmed.traveller_name || confirmed.passport_number || 'Visa case',

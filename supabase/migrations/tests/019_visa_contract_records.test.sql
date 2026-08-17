@@ -520,6 +520,133 @@ SELECT assert(
   'the register has no column capable of holding document bytes');
 
 \echo ''
+\echo '=== F. REVIEW IS ATTESTATION, NOT AN EDITING PATH ==='
+-- Reviewing must not double as a way to change a value. Otherwise a direct RPC
+-- caller could replace an identity value and leave it reviewed in one step,
+-- skipping correction → withdrawal → explicit re-review entirely.
+
+INSERT INTO visa_contract_records (id, client_source, sub_agent_id, entry_source, client_case_key,
+  traveller_name, passport_number, visa_number, nationality)
+VALUES ('aaaaaaaa-0000-4000-8000-0000000000a1', 'sub_agent',
+        '7c9e6679-7425-40de-944b-e07fc1f90ae7', 'GEMINI', gen_random_uuid(),
+        'Musa Bello', 'P1000001', 'V-90001', 'Nigerian');
+
+SET ROLE authenticated;
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+
+-- 1. Attesting to the stored value succeeds.
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'passengerName', 'Musa Bello');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'true',
+  'review_field succeeds when the value matches what is stored');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = '11111111-2222-3333-4444-555555555555',
+  'the attesting officer is stamped');
+
+-- Surrounding whitespace is not a different value.
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'passportNumber', '  P1000001 ');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passportNumber,reviewed}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'true',
+  'the same trimming the module uses is applied to the comparison');
+
+-- 2. A different value is refused.
+SELECT assert(raises($$
+  SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'passengerName', 'Somebody Else')
+$$), 'review_field refuses a value that differs from what is stored');
+
+-- 3 & 4. The refusal changed nothing at all.
+SELECT assert(
+  (SELECT traveller_name FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'Musa Bello',
+  'a refused review does not change the canonical identity value');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = '11111111-2222-3333-4444-555555555555',
+  'a refused review does not overwrite the existing reviewer evidence');
+
+-- The forbidden shortcut, end to end: replace-and-review in one call.
+SET qa.actor = '22222222-3333-4444-5555-666666666666';
+SELECT assert(raises($$
+  SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'visaNumber', 'V-FORGED')
+$$), 'a second officer cannot replace a value and review it in one operation');
+SELECT assert(
+  (SELECT visa_number FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'V-90001',
+  'the visa number is untouched by the refused attempt');
+
+-- 5, 6 & 7. The approved correction path still works, and preserves history.
+SELECT visa_contract_clear_field_review('aaaaaaaa-0000-4000-8000-0000000000a1', 'passengerName', 'Musa A. Bello');
+SELECT assert(
+  (SELECT traveller_name FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'Musa A. Bello',
+  'a correction saves the new value');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'false',
+  'the correction clears that field''s review');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,previous_review,reviewed_by}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1')
+    = '11111111-2222-3333-4444-555555555555',
+  'previous_review preserves who had reviewed it');
+
+-- The old value can no longer be attested to; only the stored one can.
+SELECT assert(raises($$
+  SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'passengerName', 'Musa Bello')
+$$), 'the superseded value cannot be reviewed');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'passengerName', 'Musa A. Bello');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = '22222222-3333-4444-5555-666666666666',
+  'reviewing the newly stored value succeeds, attributed to whoever did it');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,previous_review,reviewed_by}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1')
+    = '11111111-2222-3333-4444-555555555555',
+  'previous_review survives the re-review');
+
+-- 8 & 9. Handover and final confirmation still work on this record.
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'visaNumber',  'V-90001');
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-0000000000a1', 'nationality', 'Nigerian');
+UPDATE visa_contract_records
+SET record_status = 'REVIEWED_CONFIRMED', updated_by = '11111111-2222-3333-4444-555555555555'
+WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1';
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = 'REVIEWED_CONFIRMED',
+  'multi-officer review still reaches final confirmation');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1')
+    <> (SELECT updated_by::text FROM visa_contract_records
+        WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1'),
+  'the confirming officer still differs from a field reviewer, and both survive');
+
+-- 10. Direct evidence forgery is still blocked.
+UPDATE visa_contract_records
+SET extraction_metadata = full_review('22222222-3333-4444-5555-666666666666'),
+    updated_by = '11111111-2222-3333-4444-555555555555'
+WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1';
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,nationality,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1') = '11111111-2222-3333-4444-555555555555',
+  'a direct metadata PATCH still cannot rewrite reviewer evidence');
+
+-- 11. Spreadsheet provenance is still protected on this path too.
+UPDATE visa_contract_records
+SET spreadsheet_sync_status = 'SYNCED', spreadsheet_id = 'forged'
+WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1';
+SELECT assert(
+  (SELECT spreadsheet_sync_status = 'NOT_SYNCED' AND spreadsheet_id IS NULL
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1'),
+  'spreadsheet provenance remains protected');
+RESET ROLE;
+
+\echo ''
 \echo '=== D. SPREADSHEET PROVENANCE CANNOT BE FORGED ==='
 -- `authenticated` is the role PostgREST switches to for a browser request.
 

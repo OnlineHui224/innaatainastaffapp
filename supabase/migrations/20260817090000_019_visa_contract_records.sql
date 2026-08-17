@@ -441,11 +441,20 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 /**
- * Records that the signed-in officer has reviewed one identity field.
+ * Attests that the signed-in officer has reviewed one identity field.
  *
- * `p_value` is the value they are attesting to, so the value and the attestation
- * cannot drift apart. The reviewer, their display name and the time all come
- * from the server.
+ * Attestation ONLY. It reviews the value already stored on the record; it never
+ * writes one. `p_value` is what the officer believes they are attesting to, and
+ * a mismatch means the value moved under them — a colleague corrected it while
+ * their screen was open — so the review is refused rather than silently applied
+ * to something they did not read.
+ *
+ * That refusal is the point: without it, a direct RPC caller could replace an
+ * identity value and mark it reviewed in one step, skipping the correction →
+ * withdrawal → explicit re-review path entirely. Corrections go through
+ * `visa_contract_clear_field_review` and nowhere else.
+ *
+ * The reviewer, their display name and the time all come from the server.
  */
 CREATE OR REPLACE FUNCTION visa_contract_review_field(
   p_record_id uuid,
@@ -457,9 +466,11 @@ LANGUAGE plpgsql
 SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  actor       uuid := auth.uid();
-  actor_name  text;
-  updated     visa_contract_records;
+  actor      uuid := auth.uid();
+  actor_name text;
+  target     visa_contract_records;
+  stored     text;
+  updated    visa_contract_records;
 BEGIN
   IF actor IS NULL OR NOT can_edit_operational_records() THEN
     RAISE EXCEPTION 'visa_contract_records: not authorised to review this record'
@@ -469,46 +480,56 @@ BEGIN
     RAISE EXCEPTION 'visa_contract_records: % is not a reviewable identity field', p_field
       USING ERRCODE = 'check_violation';
   END IF;
-  IF COALESCE(btrim(p_value), '') = '' THEN
+
+  -- FOR UPDATE so a concurrent correction cannot slip between the comparison
+  -- and the stamp, leaving a review attached to a value nobody read.
+  SELECT * INTO target FROM visa_contract_records WHERE id = p_record_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'visa_contract_records: record not found'
+      USING ERRCODE = 'no_data_found';
+  END IF;
+
+  stored := to_jsonb(target) ->> visa_contract_identity_column(p_field);
+
+  IF COALESCE(btrim(stored), '') = '' THEN
     RAISE EXCEPTION 'visa_contract_records: a blank value cannot be reviewed'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Same trimming the rest of the module uses, so a stray space is not treated
+  -- as a different value.
+  IF btrim(stored) IS DISTINCT FROM btrim(COALESCE(p_value, '')) THEN
+    RAISE EXCEPTION
+      'The value changed before this review was recorded. Reload the case and review the current value.'
       USING ERRCODE = 'check_violation';
   END IF;
 
   SELECT full_name INTO actor_name FROM profiles WHERE id = actor;
 
-  EXECUTE format(
-    'UPDATE visa_contract_records
-        SET %I = $1,
-            extraction_metadata = jsonb_set(
-              -- `fields` must already exist: jsonb_set creates only the LAST
-              -- level of a path, so setting fields->key on a metadata object
-              -- with no `fields` would silently return it unchanged.
-              COALESCE(extraction_metadata, ''{}''::jsonb)
-                || jsonb_build_object(''fields'',
-                     COALESCE(extraction_metadata -> ''fields'', ''{}''::jsonb)),
-              ARRAY[''fields'', $2],
-              COALESCE(extraction_metadata #> ARRAY[''fields'', $2], ''{}''::jsonb)
-                || jsonb_build_object(
-                     ''final_value'', $1,
-                     ''reviewed'', true,
-                     ''reviewed_by'', $3::text,
-                     ''reviewed_by_name'', $4,
-                     ''reviewed_at'', $5
-                   ),
-              true
-            ),
-            updated_by = $3
-      WHERE id = $6
-      RETURNING *',
-    visa_contract_identity_column(p_field))
-  INTO updated
-  USING btrim(p_value), p_field, actor, COALESCE(actor_name, ''),
-        to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), p_record_id;
+  UPDATE visa_contract_records
+     SET extraction_metadata = jsonb_set(
+           -- `fields` must already exist: jsonb_set creates only the LAST level
+           -- of a path, so setting fields->key on metadata with no `fields`
+           -- would silently return it unchanged.
+           COALESCE(extraction_metadata, '{}'::jsonb)
+             || jsonb_build_object('fields',
+                  COALESCE(extraction_metadata -> 'fields', '{}'::jsonb)),
+           ARRAY['fields', p_field],
+           COALESCE(extraction_metadata #> ARRAY['fields', p_field], '{}'::jsonb)
+             || jsonb_build_object(
+                  'final_value', btrim(stored),
+                  'reviewed', true,
+                  'reviewed_by', actor::text,
+                  'reviewed_by_name', COALESCE(actor_name, ''),
+                  'reviewed_at',
+                    to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                ),
+           true
+         ),
+         updated_by = actor
+   WHERE id = p_record_id
+   RETURNING * INTO updated;
 
-  IF updated.id IS NULL THEN
-    RAISE EXCEPTION 'visa_contract_records: record not found'
-      USING ERRCODE = 'no_data_found';
-  END IF;
   RETURN updated;
 END;
 $$;

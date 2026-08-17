@@ -1126,12 +1126,15 @@ export default function VisaLoggerPage() {
   }, []);
 
   const handleViewPilgrim = useCallback(() => {
-    if (details.pilgrimId) navigate(`/app/pilgrims/${details.pilgrimId}`);
-  }, [details.pilgrimId, navigate]);
+    if (record?.pilgrim_id) navigate(`/app/pilgrims/${record.pilgrim_id}`);
+  }, [record?.pilgrim_id, navigate]);
 
   const handleViewHistory = useCallback(() => navigate('/app/audit-history'), [navigate]);
 
-  const showSuccess = step === 'confirm_save' && completedSteps.has('confirm_save') && Boolean(savedAt);
+  /* The success screen reports what the database holds, so it is shown only
+     when there is a confirmed record to report. */
+  const showSuccess =
+    step === 'confirm_save' && completedSteps.has('confirm_save') && Boolean(savedAt) && Boolean(record);
   const isProcessing =
     extractionStatus !== 'idle' && extractionStatus !== 'complete' && extractionStatus !== 'error';
 
@@ -1142,7 +1145,7 @@ export default function VisaLoggerPage() {
         <PageHeader
           eyebrow="Operations"
           title="Visa &amp; Contract Logger"
-          subtitle="Browse the visa records already saved against pilgrims on the platform."
+          subtitle="Browse the Visa \u0026 Contract Register. A visa is recorded whether or not its traveller has been linked to a pilgrim yet."
         />
         <ViewerReadOnly />
       </div>
@@ -1177,7 +1180,7 @@ export default function VisaLoggerPage() {
       <PageHeader
         eyebrow="Operations"
         title="Visa &amp; Contract Logger"
-        subtitle="Extract visa information, review every value explicitly, match it to an existing pilgrim, and record the confirmed details. HajjERP is the system of record for every visa logged here."
+        subtitle="The visa is recorded as soon as it is read, then every value is reviewed explicitly and the record confirmed. Linking the traveller to a HajjERP pilgrim is optional and can be done afterwards."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700">
@@ -1214,12 +1217,11 @@ export default function VisaLoggerPage() {
         </div>
       )}
 
-      {showSuccess ? (
+      {showSuccess && record ? (
         <div className="space-y-6">
           <ProvenanceLadder provenance={caseProvenance} orientation="horizontal" />
           <SuccessScreen
-            extraction={extraction}
-            details={details}
+            record={record}
             savedBy={profile?.full_name || 'Staff'}
             savedAt={savedAt}
             onViewPilgrim={handleViewPilgrim}

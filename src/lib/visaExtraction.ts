@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import type { VisaContractRecord } from '@/types/visaContract';
 
 /**
  * VISA IDENTITY EXTRACTION — browser client
@@ -35,6 +36,41 @@ export interface VisaExtractionResponse {
   /** Server-chosen model. Recorded for provenance; the browser never picks it. */
   model: string;
   extractedAt: string;
+  /**
+   * The liability record created for this case.
+   *
+   * `null` means extraction succeeded but the database write did not. The
+   * values are still usable and must not be thrown away — a paid read is not
+   * worth discarding — but responsibility tracking has NOT begun, and the
+   * caller must say so rather than imply otherwise.
+   */
+  record: VisaContractRecord | null;
+  /** True when this case already had a record; nothing was overwritten. */
+  reused: boolean;
+  persistenceError: { code: string; message: string } | null;
+}
+
+/**
+ * The Step 1 operational details sent with the document.
+ *
+ * These become the responsibility half of the record. No user id is included —
+ * the server takes the actor from the verified session.
+ */
+export interface VisaCaseSubmission {
+  clientSource: 'direct' | 'sub_agent';
+  subAgentId: string | null;
+  agentName: string;
+  assignedStaffId: string | null;
+  visaCompany: string | null;
+  plannedDepartureDate: string | null;
+  expectedReturnDate: string | null;
+  makkahHotelId: string | null;
+  makkahHotelName: string | null;
+  madinahHotelId: string | null;
+  madinahHotelName: string | null;
+  transportPackage: string | null;
+  transportSummary: string | null;
+  arrivalPort: string | null;
 }
 
 /**
@@ -131,29 +167,49 @@ function isValidResponse(raw: unknown): raw is VisaExtractionResponse {
   );
 }
 
+/** Every call needs the session token; one place to fail if it has gone. */
+async function requireToken(): Promise<string> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new VisaExtractionError(
+      'unauthenticated',
+      'Your session has expired. Sign in again to continue.',
+    );
+  }
+  return session.access_token;
+}
+
 /**
- * Extracts visa identity from an uploaded document.
+ * Extracts visa identity from an uploaded document and creates the liability
+ * record for the case in the same server-side operation.
+ *
+ * `caseKey` identifies the visa case, not the request. Sending the same key
+ * twice returns the existing record untouched rather than creating a second
+ * one — so a retried extraction can never duplicate the company's exposure,
+ * reset a reviewed record, or overwrite a staff correction.
  *
  * Throws {@link VisaExtractionError} for every failure, so a caller has one
  * thing to catch and always has a message worth showing.
  */
-export async function extractVisaIdentity(file: File): Promise<VisaExtractionResponse> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
-    throw new VisaExtractionError(
-      'unauthenticated',
-      'Your session has expired. Sign in again to use AI extraction.',
-    );
-  }
-
+export async function extractVisaIdentity(
+  file: File,
+  caseKey: string,
+  details: VisaCaseSubmission,
+): Promise<VisaExtractionResponse> {
+  const token = await requireToken();
   const dataBase64 = await fileToBase64(file);
 
   const { data, error } = await supabase.functions.invoke('visa-gemini-extract', {
-    body: { mimeType: file.type, dataBase64 },
-    headers: { Authorization: `Bearer ${session.access_token}` },
+    body: {
+      mimeType: file.type,
+      dataBase64,
+      caseKey,
+      details,
+      sourceFilename: file.name,
+    },
+    headers: { Authorization: `Bearer ${token}` },
   });
 
   if (error) throw await readError(error);
@@ -166,4 +222,42 @@ export async function extractVisaIdentity(file: File): Promise<VisaExtractionRes
   }
 
   return data;
+}
+
+/**
+ * Creates the record without reading a document.
+ *
+ * Two callers. A manual case, where the officer types the identity because
+ * extraction was unavailable — recorded as `MANUAL`, never dressed up as an
+ * extraction. And a retry, where extraction already succeeded but the write did
+ * not; that path deliberately does NOT call Gemini again, so a paid read is not
+ * spent twice.
+ */
+export async function persistVisaRecord(args: {
+  caseKey: string;
+  details: VisaCaseSubmission;
+  entrySource: 'GEMINI' | 'MANUAL';
+  /** Required for a GEMINI retry: the values the earlier read produced. */
+  fields?: VisaExtractionFields;
+  extractedAt?: string;
+  sourceFilename?: string | null;
+  sourceMimeType?: string | null;
+}): Promise<{ record: VisaContractRecord; reused: boolean }> {
+  const token = await requireToken();
+
+  const { data, error } = await supabase.functions.invoke('visa-gemini-extract', {
+    body: { mode: 'persist_only', ...args },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (error) throw await readError(error);
+
+  const record = (data as { record?: VisaContractRecord } | null)?.record;
+  if (!record?.id) {
+    throw new VisaExtractionError(
+      'not_persisted',
+      'This Visa case is not yet saved to HajjERP. Retry saving.',
+    );
+  }
+  return { record, reused: Boolean((data as { reused?: boolean }).reused) };
 }

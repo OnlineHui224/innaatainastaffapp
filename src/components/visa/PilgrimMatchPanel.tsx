@@ -148,7 +148,7 @@ export function PilgrimMatchPanel({
   return (
     <Panel
       title="Match to HajjERP"
-      description="The reviewed passport number is used to find the pilgrim this visa belongs to. A visa can only be saved against an existing HajjERP record."
+      description="The reviewed passport number is used to find the pilgrim this visa belongs to. Linking is optional — a visa record is valid without it, and stays Pending Pilgrim Match until one is chosen."
       edge={confirmedId ? 'confirmed' : 'default'}
       actions={
         confirmedId ? (
@@ -236,16 +236,17 @@ export function PilgrimMatchPanel({
         <div className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-3.5">
           <p className="flex items-center gap-2 text-sm font-bold text-navy-900">
             <UserX className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
-            No matching pilgrim found
+            Pending Pilgrim Match
           </p>
           <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-amber-900">
-            No HajjERP pilgrim holds passport <Identifier value={passport} />. This visa cannot be
-            saved until the traveller exists in HajjERP. Create or import the pilgrim, then return
-            and match this visa record.
+            No HajjERP pilgrim holds passport <Identifier value={passport} />.{' '}
+            <strong className="font-bold">This does not block the visa record.</strong> Inna Ataina
+            issued the visa and carries responsibility for it whether or not the traveller has been
+            entered into Pilgrims yet, so the record can be reviewed and confirmed now.
           </p>
           <p className="mt-1.5 text-xs leading-relaxed text-amber-900">
-            Everything you have entered here stays on screen in the meantime. A visa is never saved
-            against a new or arbitrary pilgrim.
+            The record stays Pending Pilgrim Match until somebody links it. No pilgrim is created
+            automatically, and a visa is never linked to an arbitrary one.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2.5">
             <ButtonLink to="/app/pilgrims" variant="secondary" size="sm">

@@ -15,12 +15,26 @@
 import {
   base64ByteLength,
   isEmptyExtraction,
+  isUuid,
   MAX_BYTES,
   normaliseConfidence,
   normaliseValue,
   validateBody,
+  validateDetails,
   validateFields,
 } from "./validation.ts";
+
+const CASE_KEY = "0f8fad5b-d9cb-469f-a165-70867728950e";
+const AGENT_ID = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+
+/** A minimal valid Step 1 payload; individual checks override one key at a time. */
+const DETAILS = {
+  clientSource: "sub_agent",
+  subAgentId: AGENT_ID,
+  agentName: "Some Agent Ltd",
+  visaCompany: "A Visa Company",
+  transportPackage: "full_route",
+};
 
 let passed = 0;
 const failures: string[] = [];
@@ -110,8 +124,71 @@ eq("no padding", base64ByteLength("AAAA"), 3);
 eq("one pad character", base64ByteLength("AAA="), 2);
 eq("two pad characters", base64ByteLength("AA=="), 1);
 
+console.log("\n═══ RESPONSIBILITY INTEGRITY ═══");
+/* A record must not contradict itself. These mirror the database CHECK, so a
+   contradiction is refused with a readable message instead of surfacing as a
+   constraint violation. */
+const subAgentOk = validateDetails(DETAILS);
+check("a sub-agent client with an agent is accepted", subAgentOk.ok);
+eq("the agent id survives", subAgentOk.ok ? subAgentOk.details.subAgentId : null, AGENT_ID);
+
+const subAgentNoId = validateDetails({ ...DETAILS, subAgentId: null });
+check("a sub-agent client WITHOUT an agent is rejected", !subAgentNoId.ok);
+eq("rejected as invalid_details", subAgentNoId.ok ? null : subAgentNoId.code, "invalid_details");
+
+const directOk = validateDetails({ ...DETAILS, clientSource: "direct", subAgentId: null });
+check("a direct client with no agent is accepted", directOk.ok);
+eq("a direct client carries no agent", directOk.ok ? directOk.details.subAgentId : "x", null);
+
+const directWithAgent = validateDetails({ ...DETAILS, clientSource: "direct" });
+check("a direct client WITH an agent is rejected", !directWithAgent.ok);
+
+const badAgentId = validateDetails({ ...DETAILS, subAgentId: "not-a-uuid" });
+check("a non-uuid agent id is rejected, not silently kept", !badAgentId.ok);
+
+console.log("\n═══ OPERATIONAL DETAIL NORMALISATION ═══");
+const dated = validateDetails({
+  ...DETAILS,
+  plannedDepartureDate: "2026-09-01",
+  expectedReturnDate: "2026-09-20",
+  arrivalPort: "  Jeddah ",
+});
+eq("a valid date is kept", dated.ok ? dated.details.plannedDepartureDate : null, "2026-09-01");
+eq("arrival port is trimmed", dated.ok ? dated.details.arrivalPort : null, "Jeddah");
+
+for (const bad of ["2026-02-31", "01/09/2026", "2026-9-1", "tomorrow", ""]) {
+  const r = validateDetails({ ...DETAILS, plannedDepartureDate: bad });
+  eq(
+    `invalid date ${JSON.stringify(bad)} becomes null`,
+    r.ok ? r.details.plannedDepartureDate : "not-ok",
+    null,
+  );
+}
+
+const badPackage = validateDetails({ ...DETAILS, transportPackage: "helicopter" });
+check("an unrecognised transport package is rejected", !badPackage.ok);
+for (const pkg of ["airport_transfers", "full_route", "no_transport"]) {
+  check(`transport package ${pkg} is accepted`, validateDetails({ ...DETAILS, transportPackage: pkg }).ok);
+}
+check("a null transport package is accepted", validateDetails({ ...DETAILS, transportPackage: null }).ok);
+
+const noDetails = validateDetails(undefined);
+check("missing details are rejected", !noDetails.ok);
+check("an array of details is rejected", !validateDetails([]).ok);
+
+console.log("\n═══ UUID GUARD ═══");
+check("a real uuid is recognised", isUuid(CASE_KEY));
+check("a truncated uuid is not", !isUuid(CASE_KEY.slice(0, 20)));
+check("a non-string is not", !isUuid(42));
+check("empty is not", !isUuid(""));
+
 console.log("\n═══ REQUEST BODY ═══");
-const pdf = { mimeType: "application/pdf", dataBase64: "AAAA" };
+const pdf = {
+  mimeType: "application/pdf",
+  dataBase64: "AAAA",
+  caseKey: CASE_KEY,
+  details: DETAILS,
+};
 check("a valid PDF is accepted", validateBody(pdf).ok);
 check("a valid PNG is accepted", validateBody({ ...pdf, mimeType: "image/png" }).ok);
 check("a valid JPEG is accepted", validateBody({ ...pdf, mimeType: "image/jpeg" }).ok);
@@ -129,22 +206,29 @@ eq("rejected with unsupported_type", wrongType.ok ? null : wrongType.code, "unsu
 eq("rejected with HTTP 415", wrongType.ok ? null : wrongType.status, 415);
 
 for (const [label, value] of [["missing", undefined], ["empty", ""], ["a number", 4]] as const) {
-  const bad = validateBody({ mimeType: "application/pdf", dataBase64: value });
+  const bad = validateBody({ ...pdf, dataBase64: value });
   check(`${label} document data is rejected`, !bad.ok);
 }
 eq(
   "non-base64 data is rejected",
-  (() => { const r = validateBody({ mimeType: "application/pdf", dataBase64: "not base64!!" }); return r.ok ? null : r.code; })(),
+  (() => { const r = validateBody({ ...pdf, dataBase64: "not base64!!" }); return r.ok ? null : r.code; })(),
   "invalid_request",
 );
 check("a non-object body is rejected", !validateBody("hello").ok);
+
+/* Without a case key an extraction could not be made idempotent, so it is
+   refused rather than allowed to create an unbounded number of records. */
+check("a body with no case key is rejected", !validateBody({ mimeType: "application/pdf", dataBase64: "AAAA", details: DETAILS }).ok);
+check("a body with a bad case key is rejected", !validateBody({ ...pdf, caseKey: "nope" }).ok);
+check("a body with contradictory responsibility is rejected", !validateBody({ ...pdf, details: { ...DETAILS, clientSource: "direct" } }).ok);
+eq("the case key survives validation", (() => { const r = validateBody(pdf); return r.ok ? r.body.caseKey : null; })(), CASE_KEY);
 check("an array body is rejected", !validateBody([]).ok);
 check("null body is rejected", !validateBody(null).ok);
 
 /* The server limit is the one that counts — a caller that skips the browser
    entirely still cannot push 10 MB+ through. */
 const oversized = validateBody({
-  mimeType: "application/pdf",
+  ...pdf,
   dataBase64: "A".repeat(Math.ceil(((MAX_BYTES + 1024) * 4) / 3)),
 });
 check("a document over 10 MB is rejected", !oversized.ok);
@@ -152,7 +236,7 @@ eq("rejected with too_large", oversized.ok ? null : oversized.code, "too_large")
 eq("rejected with HTTP 413", oversized.ok ? null : oversized.status, 413);
 
 const atLimit = validateBody({
-  mimeType: "application/pdf",
+  ...pdf,
   dataBase64: "A".repeat(Math.floor((MAX_BYTES * 4) / 3 / 4) * 4),
 });
 check("a document just under the limit is accepted", atLimit.ok);

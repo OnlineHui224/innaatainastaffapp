@@ -9,6 +9,15 @@ import { EmptyState, ReadOnlyNotice, TableSkeleton } from '@/components/ui/Feedb
 import { Identifier, SearchInput } from '@/components/ui/Field';
 import { Panel } from '@/components/ui/Panel';
 import { RecordCard, TBody, TD, TH, THead, TR, TableFrame } from '@/components/ui/Table';
+import {
+  PILGRIM_MATCH_LABELS,
+  recordHeadline,
+  responsibilityLabel,
+  type ClientSource,
+  type EntrySource,
+  type PilgrimMatchStatus,
+  type RecordStatus,
+} from '@/types/visaContract';
 
 interface VisaLogRow {
   id: string;
@@ -18,6 +27,9 @@ interface VisaLogRow {
   agent_name: string | null;
   visa_company: string | null;
   created_at: string;
+  record_status: RecordStatus;
+  entry_source: EntrySource;
+  pilgrim_match_status: PilgrimMatchStatus;
 }
 
 /**
@@ -25,6 +37,13 @@ interface VisaLogRow {
  *
  * Viewers get a finished read-only browser of the visa records that exist —
  * deliberately not the processing workflow with every control disabled.
+ *
+ * Reads `visa_contract_records`, which is the register. Reading `pilgrims`
+ * instead would silently hide every visa whose traveller is not yet a pilgrim —
+ * precisely the cases the company most needs visibility of. Read access is
+ * unchanged: that table's SELECT policy matches the `pilgrims` one, so exactly
+ * the same staff can see exactly the same set of visas, and no role gained or
+ * lost visibility by the move.
  */
 export function ViewerReadOnly() {
   const { profile } = useAuth();
@@ -44,18 +63,18 @@ export function ViewerReadOnly() {
     setError(null);
     try {
       let request = supabase
-        .from('pilgrims')
-        .select(
-          'id, full_name, visa_number, passport_number, visa_company, created_at, sub_agents(organisation_name)',
-        )
-        .not('visa_number', 'is', null)
+        .from('visa_contract_records')
+        // Kept as one literal: supabase-js parses the select list at the type
+        // level, and a concatenated string defeats it.
+        .select('id, traveller_name, visa_number, passport_number, visa_company, record_date, created_at, client_source, agent_name_snapshot, record_status, entry_source, pilgrim_match_status')
+        .order('record_date', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(50);
 
       if (debouncedQuery.trim()) {
         const q = debouncedQuery.trim();
         request = request.or(
-          `full_name.ilike.%${q}%,passport_number.ilike.%${q}%,visa_number.ilike.%${q}%`,
+          `traveller_name.ilike.%${q}%,passport_number.ilike.%${q}%,visa_number.ilike.%${q}%`,
         );
       }
 
@@ -65,12 +84,20 @@ export function ViewerReadOnly() {
       setRecords(
         (data || []).map((r: Record<string, unknown>) => ({
           id: r.id as string,
-          pilgrim_name: r.full_name as string,
+          /* A pending record may not have a readable name yet. Saying so beats
+             showing a blank cell that reads like missing data. */
+          pilgrim_name: (r.traveller_name as string | null) || 'Not yet read',
           visa_number: r.visa_number as string | null,
-          passport_number: r.passport_number as string,
-          agent_name: (r.sub_agents as { organisation_name: string } | null)?.organisation_name ?? null,
+          passport_number: (r.passport_number as string | null) ?? '',
+          agent_name: responsibilityLabel({
+            client_source: r.client_source as ClientSource,
+            agent_name_snapshot: (r.agent_name_snapshot as string) ?? '',
+          }),
           visa_company: r.visa_company as string | null,
-          created_at: r.created_at as string,
+          created_at: (r.record_date as string) || (r.created_at as string),
+          record_status: r.record_status as RecordStatus,
+          entry_source: r.entry_source as EntrySource,
+          pilgrim_match_status: r.pilgrim_match_status as PilgrimMatchStatus,
         })),
       );
     } catch (e) {
@@ -111,7 +138,7 @@ export function ViewerReadOnly() {
 
       <Panel
         title="Saved visa records"
-        description={`Showing the ${records.length} most recent ${records.length === 1 ? 'record' : 'records'} with a visa number on file.`}
+        description={`Showing the ${records.length} most recent ${records.length === 1 ? 'record' : 'records'} in the Visa & Contract Register, including those not yet linked to a pilgrim.`}
         bodyClassName="p-0"
       >
         {loading ? (
@@ -136,10 +163,11 @@ export function ViewerReadOnly() {
               <TableFrame caption="Saved visa records" className="rounded-none border-0">
                 <THead>
                   <tr>
-                    <TH nowrap>Pilgrim</TH>
+                    <TH nowrap>Traveller</TH>
                     <TH nowrap>Passport</TH>
                     <TH nowrap>Visa number</TH>
-                    <TH className="hidden lg:table-cell" nowrap>Agent</TH>
+                    <TH nowrap>Status</TH>
+                    <TH className="hidden lg:table-cell" nowrap>Responsibility</TH>
                     <TH className="hidden lg:table-cell" nowrap>Visa company</TH>
                     <TH numeric nowrap>Recorded</TH>
                   </tr>
@@ -153,6 +181,14 @@ export function ViewerReadOnly() {
                       </TD>
                       <TD>
                         <Identifier value={row.visa_number} />
+                      </TD>
+                      <TD>
+                        <span className="block">{recordHeadline(row)}</span>
+                        {row.pilgrim_match_status === 'PENDING_PILGRIM_MATCH' && (
+                          <span className="mt-0.5 block text-2xs text-slate-500">
+                            {PILGRIM_MATCH_LABELS.PENDING_PILGRIM_MATCH}
+                          </span>
+                        )}
                       </TD>
                       <TD className="hidden lg:table-cell">{row.agent_name || 'Unassigned'}</TD>
                       <TD className="hidden lg:table-cell">{row.visa_company || '—'}</TD>
@@ -183,12 +219,26 @@ export function ViewerReadOnly() {
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-2xs uppercase tracking-wide text-slate-500">Agent</dt>
+                      <dt className="text-2xs uppercase tracking-wide text-slate-500">
+                        Responsibility
+                      </dt>
                       <dd className="text-slate-800">{row.agent_name || 'Unassigned'}</dd>
                     </div>
                     <div>
                       <dt className="text-2xs uppercase tracking-wide text-slate-500">Recorded</dt>
                       <dd className="text-slate-800">{formatDate(row.created_at.slice(0, 10))}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-2xs uppercase tracking-wide text-slate-500">Status</dt>
+                      <dd className="text-slate-800">
+                        {recordHeadline(row)}
+                        {row.pilgrim_match_status === 'PENDING_PILGRIM_MATCH' && (
+                          <span className="text-slate-500">
+                            {' · '}
+                            {PILGRIM_MATCH_LABELS.PENDING_PILGRIM_MATCH}
+                          </span>
+                        )}
+                      </dd>
                     </div>
                   </dl>
                 </RecordCard>

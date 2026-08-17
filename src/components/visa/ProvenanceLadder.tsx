@@ -126,13 +126,18 @@ export function buildCaseProvenance(input: {
     },
     matched: {
       reached: Boolean(input.matchedPilgrimName),
+      /* Linking a pilgrim is optional, so an unreached stage here is not an
+         outstanding task. Saying so stops the ladder implying the record is
+         incomplete when it is not. */
       detail: input.matchedPilgrimName
         ? `${input.matchedPilgrimName}${input.matchedPassport ? ` · passport ${input.matchedPassport}` : ''}`
-        : null,
+        : 'Optional — the visa record is valid without a linked pilgrim',
     },
     saved: {
       reached: Boolean(input.savedAt),
-      detail: input.savedAt ? `Persisted to the pilgrim record · ${formatDateTime(input.savedAt)}` : null,
+      detail: input.savedAt
+        ? `Recorded in the Visa & Contract Register · ${formatDateTime(input.savedAt)}`
+        : null,
     },
   };
 }

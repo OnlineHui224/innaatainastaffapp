@@ -2,10 +2,14 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import {
   type ExtractionFields,
+  type OperationalDetails,
   type ValidBody,
+  FIELD_KEYS,
   isEmptyExtraction,
+  isUuid,
   MAX_BODY_BYTES,
   validateBody,
+  validateDetails,
   validateFields,
 } from "./validation.ts";
 
@@ -65,6 +69,15 @@ function corsHeaders(origin: string | null): Record<string, string> {
 }
 
 const GEMINI_TIMEOUT_MS = 45_000;
+
+/** Mirrors `can_edit_operational_records()` in migration 019. */
+const OPERATIONAL_ROLES = new Set([
+  "platform_owner",
+  "super_admin",
+  "admin",
+  "operations_manager",
+  "operations_staff",
+]);
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -307,6 +320,167 @@ async function callGemini(body: ValidBody): Promise<GeminiOutcome> {
   }
 }
 
+/* ── The liability record ─────────────────────────────────────────────────────
+   Creation lives here rather than in the browser for two reasons: it must
+   happen the moment a document is read, and `entry_source` / `created_by` are
+   provenance claims a client must not be able to forge. RLS grants no INSERT to
+   `authenticated`, so this service-role path is the only way a record exists. */
+
+/** Columns the browser is given back. No more than the officer's own case. */
+const RECORD_COLUMNS = `
+  id, record_date, traveller_name, passport_number, visa_number, nationality,
+  client_source, sub_agent_id, agent_name_snapshot, assigned_staff_id,
+  visa_company, planned_departure_date, expected_return_date,
+  makkah_hotel_id, makkah_hotel_name, madinah_hotel_id, madinah_hotel_name,
+  transport_package, transport_summary, arrival_port,
+  record_status, entry_source, pilgrim_id, pilgrim_match_status,
+  spreadsheet_sync_status, source_filename, source_mime_type,
+  extracted_at, extraction_model, extraction_metadata,
+  client_case_key, created_by, created_at, updated_by, updated_at
+`;
+
+type PersistOutcome =
+  | { ok: true; record: Record<string, unknown>; reused: boolean }
+  | { ok: false; code: string; message: string };
+
+/**
+ * Creates the record for a visa case, exactly once.
+ *
+ * Idempotent on `client_case_key`: if a record already exists for this case it
+ * is returned untouched. That is the whole point — a retried extraction must
+ * never reset a reviewed record to pending, overwrite a staff correction, or
+ * duplicate the company's liability trail. Nothing here ever UPDATEs.
+ */
+async function persistRecord(args: {
+  caseKey: string;
+  details: OperationalDetails;
+  entrySource: "GEMINI" | "MANUAL";
+  fields: ExtractionFields | null;
+  userId: string;
+  sourceFilename: string | null;
+  sourceMimeType: string | null;
+  extractedAt: string | null;
+  persistedViaRetry: boolean;
+}): Promise<PersistOutcome> {
+  const existing = await adminClient
+    .from("visa_contract_records")
+    .select(RECORD_COLUMNS)
+    .eq("client_case_key", args.caseKey)
+    .maybeSingle();
+
+  if (existing.data) {
+    return { ok: true, record: existing.data, reused: true };
+  }
+
+  const { details, fields } = args;
+
+  /* The machine's original claim, kept beside every later correction so a
+     staff edit never erases what was actually read. */
+  const extractionMetadata: Record<string, unknown> = {
+    entry_source: args.entrySource,
+    fields: Object.fromEntries(
+      FIELD_KEYS.map((key) => [
+        key,
+        {
+          ai_value: fields ? fields[key].value : null,
+          ai_confidence: fields ? fields[key].confidence : null,
+          edited: false,
+          reviewed: false,
+          reviewed_by: null,
+          reviewed_by_name: null,
+          reviewed_at: null,
+        },
+      ]),
+    ),
+  };
+  if (args.persistedViaRetry) {
+    /* Recorded because these values reached the database from the browser
+       after a failed first write, not straight from the extractor. */
+    extractionMetadata.persisted_via = "retry";
+  }
+
+  const insert = await adminClient
+    .from("visa_contract_records")
+    .insert({
+      traveller_name: fields?.travellerName.value ?? null,
+      passport_number: fields?.passportNumber.value ?? null,
+      visa_number: fields?.visaNumber.value ?? null,
+      nationality: fields?.nationality.value ?? null,
+
+      client_source: details.clientSource,
+      sub_agent_id: details.subAgentId,
+      agent_name_snapshot: details.agentName,
+      assigned_staff_id: details.assignedStaffId,
+
+      visa_company: details.visaCompany,
+      planned_departure_date: details.plannedDepartureDate,
+      expected_return_date: details.expectedReturnDate,
+      makkah_hotel_id: details.makkahHotelId,
+      makkah_hotel_name: details.makkahHotelName,
+      madinah_hotel_id: details.madinahHotelId,
+      madinah_hotel_name: details.madinahHotelName,
+      transport_package: details.transportPackage,
+      transport_summary: details.transportSummary,
+      arrival_port: details.arrivalPort,
+
+      record_status: "PENDING_REVIEW",
+      entry_source: args.entrySource,
+      pilgrim_match_status: "PENDING_PILGRIM_MATCH",
+      spreadsheet_sync_status: "NOT_SYNCED",
+
+      source_filename: args.sourceFilename,
+      source_mime_type: args.sourceMimeType,
+      extracted_at: args.extractedAt,
+      extraction_model: args.entrySource === "GEMINI" ? geminiModel : null,
+      extraction_metadata: extractionMetadata,
+
+      client_case_key: args.caseKey,
+      created_by: args.userId,
+      updated_by: args.userId,
+    })
+    .select(RECORD_COLUMNS)
+    .single();
+
+  if (insert.error) {
+    /* 23505 — two requests for the same case raced. The other one won, which is
+       the correct outcome; return its record rather than reporting a failure. */
+    if (insert.error.code === "23505") {
+      const raced = await adminClient
+        .from("visa_contract_records")
+        .select(RECORD_COLUMNS)
+        .eq("client_case_key", args.caseKey)
+        .maybeSingle();
+      if (raced.data) return { ok: true, record: raced.data, reused: true };
+    }
+    /* 23514 — a CHECK failed, in practice the responsibility constraint. */
+    if (insert.error.code === "23514") {
+      return {
+        ok: false,
+        code: "invalid_details",
+        message:
+          "The responsibility details for this visa are inconsistent. Check the client source and agent.",
+      };
+    }
+    /* 23503 — a referenced agent, hotel or staff member does not exist. */
+    if (insert.error.code === "23503") {
+      return {
+        ok: false,
+        code: "invalid_details",
+        message:
+          "One of the selected records no longer exists. Reload the page and re-select it.",
+      };
+    }
+    return {
+      ok: false,
+      code: "not_persisted",
+      message:
+        "This Visa case is not yet saved to HajjERP. Retry saving.",
+    };
+  }
+
+  return { ok: true, record: insert.data, reused: false };
+}
+
 /* ── Handler ──────────────────────────────────────────────────────────────── */
 
 Deno.serve(async (req: Request) => {
@@ -366,9 +540,11 @@ Deno.serve(async (req: Request) => {
       origin,
     );
   }
-  /* Viewers browse saved records; they do not process documents. Mirrors the
-     read-only Visa Logger the frontend already gives them. */
-  if (profile.role === "viewer") {
+  /* Operational roles only, matching `can_edit_operational_records()` in
+     migration 019 and `canEditPilgrims` in the frontend. Viewers browse saved
+     records; they do not create liability records. Kept as an allowlist rather
+     than a viewer denylist so a role added later is refused by default. */
+  if (!OPERATIONAL_ROLES.has(String(profile.role))) {
     return fail(
       "forbidden_role",
       "Your role does not include visa processing.",
@@ -377,25 +553,8 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  /* 3 ── Configuration, reported distinctly so a missing secret is
-          distinguishable from a Google outage. */
-  if (!geminiApiKey) {
-    console.error(
-      JSON.stringify({
-        event: "visa_extract_misconfigured",
-        detail: "GEMINI_API_KEY not set",
-      }),
-    );
-    return fail(
-      "not_configured",
-      "AI extraction is not configured yet. Enter the Visa details manually.",
-      503,
-      origin,
-    );
-  }
-
-  /* 4 ── Document. The declared length is checked before the body is read, so
-          an oversized payload is refused rather than buffered. */
+  /* 3 ── Body. The declared length is checked first, so an oversized payload is
+          refused rather than buffered. */
   const declaredLength = Number(req.headers.get("Content-Length") ?? "0");
   if (declaredLength > MAX_BODY_BYTES) {
     return fail(
@@ -412,14 +571,128 @@ Deno.serve(async (req: Request) => {
   } catch {
     return fail("invalid_request", "No document was received.", 400, origin);
   }
+  const body = (rawBody ?? {}) as Record<string, unknown>;
+
+  /* ── Mode B: create the record without reading a document ──────────────────
+     Two callers use this. A manual case, where the officer types the identity
+     because extraction is unavailable. And a retry, where extraction already
+     succeeded but the database write did not — the point of which is to save
+     the values we already have WITHOUT spending another Gemini request. */
+  if (body.mode === "persist_only") {
+    const entrySource = body.entrySource === "GEMINI" ? "GEMINI" : "MANUAL";
+
+    if (!isUuid(body.caseKey)) {
+      return fail(
+        "invalid_request",
+        "This visa case could not be identified. Reload the page and try again.",
+        400,
+        origin,
+      );
+    }
+    const details = validateDetails(body.details);
+    if (!details.ok) {
+      return fail(details.code, details.message, details.status, origin);
+    }
+
+    /* Retried values are re-normalised rather than trusted: the same rules that
+       turn "N/A" and prose into null on the extraction path apply here too. */
+    const fields = entrySource === "GEMINI" ? validateFields(body.fields) : null;
+
+    const persisted = await persistRecord({
+      caseKey: body.caseKey,
+      details: details.details,
+      entrySource,
+      fields,
+      userId: user.id,
+      sourceFilename: typeof body.sourceFilename === "string"
+        ? body.sourceFilename.slice(0, 260)
+        : null,
+      sourceMimeType: typeof body.sourceMimeType === "string"
+        ? body.sourceMimeType.slice(0, 100)
+        : null,
+      extractedAt: entrySource === "GEMINI" && typeof body.extractedAt === "string"
+        ? body.extractedAt
+        : null,
+      persistedViaRetry: entrySource === "GEMINI",
+    });
+
+    console.log(
+      JSON.stringify({
+        event: "visa_record_persist",
+        user_id: user.id,
+        entry_source: entrySource,
+        outcome: persisted.ok ? (persisted.reused ? "reused" : "created") : persisted.code,
+        duration_ms: Date.now() - started,
+      }),
+    );
+
+    if (!persisted.ok) {
+      return fail(persisted.code, persisted.message, 503, origin);
+    }
+    return json({ record: persisted.record, reused: persisted.reused }, 200, origin);
+  }
+
+  /* ── Mode A: read a document, then create the record ─────────────────────── */
+
+  /* Reported distinctly so a missing secret is distinguishable from an outage. */
+  if (!geminiApiKey) {
+    console.error(
+      JSON.stringify({
+        event: "visa_extract_misconfigured",
+        detail: "GEMINI_API_KEY not set",
+      }),
+    );
+    return fail(
+      "not_configured",
+      "AI extraction is not configured yet. Enter the Visa details manually.",
+      503,
+      origin,
+    );
+  }
 
   const validated = validateBody(rawBody);
   if (!validated.ok) {
     return fail(validated.code, validated.message, validated.status, origin);
   }
 
-  /* 5 ── Extraction. */
+  /* 4 ── Extraction. Unchanged from the proven implementation. */
   const outcome = await callGemini(validated.body);
+
+  if (!outcome.ok) {
+    console.log(
+      JSON.stringify({
+        event: "visa_extract",
+        user_id: user.id,
+        mime_type: validated.body.mimeType,
+        bytes: validated.body.byteLength,
+        model: geminiModel,
+        outcome: outcome.code,
+        provider_status: outcome.logStatus ?? null,
+        duration_ms: Date.now() - started,
+      }),
+    );
+    return fail(outcome.code, outcome.message, outcome.status, origin);
+  }
+
+  /* 5 ── The liability record, created immediately.
+          A database failure here does NOT discard the extraction: the officer
+          gets the values back with `record: null` and a retry that writes only
+          the row. Losing a good read — and a paid request — because a write
+          failed would be the worse outcome. What must never happen is the
+          system implying responsibility tracking has begun when it has not, and
+          `record: null` is how the frontend knows it has not. */
+  const extractedAt = new Date().toISOString();
+  const persisted = await persistRecord({
+    caseKey: validated.body.caseKey,
+    details: validated.body.details,
+    entrySource: "GEMINI",
+    fields: outcome.fields,
+    userId: user.id,
+    sourceFilename: validated.body.sourceFilename,
+    sourceMimeType: validated.body.mimeType,
+    extractedAt,
+    persistedViaRetry: false,
+  });
 
   /* 6 ── Logging: codes, sizes and timings only.
           Never the document, never the base64, never the extracted identity,
@@ -431,21 +704,23 @@ Deno.serve(async (req: Request) => {
       mime_type: validated.body.mimeType,
       bytes: validated.body.byteLength,
       model: geminiModel,
-      outcome: outcome.ok ? "ok" : outcome.code,
-      provider_status: outcome.ok ? 200 : outcome.logStatus ?? null,
+      outcome: "ok",
+      provider_status: 200,
+      persistence: persisted.ok ? (persisted.reused ? "reused" : "created") : persisted.code,
       duration_ms: Date.now() - started,
     }),
   );
-
-  if (!outcome.ok) {
-    return fail(outcome.code, outcome.message, outcome.status, origin);
-  }
 
   return json(
     {
       fields: outcome.fields,
       model: geminiModel,
-      extractedAt: new Date().toISOString(),
+      extractedAt,
+      record: persisted.ok ? persisted.record : null,
+      reused: persisted.ok ? persisted.reused : false,
+      persistenceError: persisted.ok
+        ? null
+        : { code: persisted.code, message: persisted.message },
     },
     200,
     origin,

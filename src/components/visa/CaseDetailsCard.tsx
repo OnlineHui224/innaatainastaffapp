@@ -232,8 +232,71 @@ export function CaseDetailsCard({
             {/* An Existing Pilgrim is deliberately NOT selected here.
                 The visa identity is extracted or entered first, reviewed, and
                 only then matched to a HajjERP pilgrim by passport number. */}
-            {/* Responsible Agent — with manual entry */}
+
+            {/* Client source.
+                Inna Ataina carries the exposure either way — it issued the visa
+                — but direct clients and Sub-Agent clients aggregate differently
+                for accountability, so the record states which it is. A direct
+                client carries no Sub-Agent; no placeholder agent is invented to
+                stand in for the company. */}
             <div className="md:col-span-2">
+              <FieldLabel>Client Source</FieldLabel>
+              <div role="radiogroup" aria-label="Client source" className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ['sub_agent', 'Sub-Agent client', 'Introduced by a Sub-Agent.'],
+                    ['direct', 'Inna Ataina direct client', 'No Sub-Agent involved.'],
+                  ] as const
+                ).map(([value, label, help]) => {
+                  const active = details.clientSource === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      disabled={disabled}
+                      onClick={() =>
+                        onChange(
+                          value === 'direct'
+                            ? /* A direct client must not also carry an agent —
+                                 the database refuses that combination. */
+                              {
+                                clientSource: 'direct',
+                                agentId: null,
+                                agentName: '',
+                                agentIsProposed: false,
+                                newAgent: null,
+                              }
+                            : { clientSource: 'sub_agent' },
+                        )
+                      }
+                      className={cn(
+                        'min-h-[44px] flex-1 rounded-md border px-3.5 py-2.5 text-left transition-colors sm:min-h-0 sm:flex-none',
+                        active
+                          ? 'border-brand-600 bg-brand-50'
+                          : 'border-slate-300 bg-white hover:bg-slate-50',
+                        disabled && 'opacity-50',
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'block text-sm font-semibold',
+                          active ? 'text-brand-800' : 'text-slate-700',
+                        )}
+                      >
+                        {label}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-slate-500">{help}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Responsible Agent — with manual entry.
+                Hidden for a direct client, because there is no agent to name. */}
+            <div className={cn('md:col-span-2', details.clientSource === 'direct' && 'hidden')}>
               <FieldLabel>Responsible Agent</FieldLabel>
               {!showNewAgent ? (
                 <>
@@ -512,6 +575,21 @@ export function CaseDetailsCard({
                 <input aria-label="Expected return date" type="date" value={details.expectedReturnDate} onChange={handleDateChange('expectedReturnDate')} disabled={disabled} className={cn(inputClass, 'pl-10')} />
               </div>
               <p className="mt-1 text-xs text-slate-500">Planned date only — does not confirm actual departure</p>
+            </div>
+            <div>
+              <FieldLabel>Arrival Port</FieldLabel>
+              <input
+                type="text"
+                value={details.arrivalPort}
+                onChange={(e) => onChange({ arrivalPort: e.target.value })}
+                aria-label="Planned arrival port"
+                placeholder="e.g. Jeddah"
+                disabled={disabled}
+                className={inputClass}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Planned port of entry — the actual arrival is confirmed separately
+              </p>
             </div>
           </div>
           {(dateError || errors.dateError) && (

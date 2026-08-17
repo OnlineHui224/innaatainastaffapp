@@ -117,15 +117,128 @@ export function isEmptyExtraction(fields: ExtractionFields): boolean {
 
 /* ── The request body ─────────────────────────────────────────────────────── */
 
+/**
+ * The Step 1 operational details that accompany a document.
+ *
+ * These become the responsibility half of the liability record, so they are
+ * validated as strictly as the document itself. Note what is absent: no
+ * `userId` and no `createdBy`. The actor comes from the verified JWT.
+ */
+export interface OperationalDetails {
+  clientSource: "direct" | "sub_agent";
+  subAgentId: string | null;
+  agentName: string;
+  assignedStaffId: string | null;
+  visaCompany: string | null;
+  plannedDepartureDate: string | null;
+  expectedReturnDate: string | null;
+  makkahHotelId: string | null;
+  makkahHotelName: string | null;
+  madinahHotelId: string | null;
+  madinahHotelName: string | null;
+  transportPackage: string | null;
+  transportSummary: string | null;
+  arrivalPort: string | null;
+}
+
 export interface ValidBody {
   mimeType: string;
   dataBase64: string;
   byteLength: number;
+  caseKey: string;
+  details: OperationalDetails;
+  sourceFilename: string | null;
 }
 
 export type BodyResult =
   | { ok: true; body: ValidBody }
   | { ok: false; code: string; message: string; status: number };
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const TRANSPORT_PACKAGES = new Set([
+  "airport_transfers",
+  "full_route",
+  "no_transport",
+]);
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
+/** Trimmed string, or null. Bounded so a free-text field cannot carry a payload. */
+function text(raw: unknown, max = 200): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, max);
+}
+
+function isoDate(raw: unknown): string | null {
+  if (typeof raw !== "string" || !DATE_RE.test(raw.trim())) return null;
+  const value = raw.trim();
+  /* Rejects 2026-02-31 and similar, which the regex alone would accept. */
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10) === value ? value : null;
+}
+
+export type DetailsResult =
+  | { ok: true; details: OperationalDetails }
+  | { ok: false; code: string; message: string; status: number };
+
+export function validateDetails(raw: unknown): DetailsResult {
+  const reject = (message: string): DetailsResult => ({
+    ok: false,
+    code: "invalid_details",
+    message,
+    status: 400,
+  });
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return reject("The operational details for this visa are missing.");
+  }
+  const d = raw as Record<string, unknown>;
+
+  const clientSource = d.clientSource === "direct" ? "direct" : "sub_agent";
+  const subAgentId = isUuid(d.subAgentId) ? d.subAgentId : null;
+
+  /* Mirrors the database CHECK constraint, so a contradictory record is
+     refused with a readable message rather than a constraint violation. */
+  if (clientSource === "sub_agent" && !subAgentId) {
+    return reject("Select the responsible agent, or record this as a direct client.");
+  }
+  if (clientSource === "direct" && subAgentId) {
+    return reject("A direct client cannot also carry a responsible agent.");
+  }
+
+  const transportPackage = text(d.transportPackage, 40);
+  if (transportPackage && !TRANSPORT_PACKAGES.has(transportPackage)) {
+    return reject("Unrecognised transportation package.");
+  }
+
+  return {
+    ok: true,
+    details: {
+      clientSource,
+      subAgentId,
+      agentName: text(d.agentName, 200) ?? "",
+      assignedStaffId: isUuid(d.assignedStaffId) ? d.assignedStaffId : null,
+      visaCompany: text(d.visaCompany),
+      plannedDepartureDate: isoDate(d.plannedDepartureDate),
+      expectedReturnDate: isoDate(d.expectedReturnDate),
+      makkahHotelId: isUuid(d.makkahHotelId) ? d.makkahHotelId : null,
+      makkahHotelName: text(d.makkahHotelName),
+      madinahHotelId: isUuid(d.madinahHotelId) ? d.madinahHotelId : null,
+      madinahHotelName: text(d.madinahHotelName),
+      transportPackage,
+      transportSummary: text(d.transportSummary, 400),
+      arrivalPort: text(d.arrivalPort, 120),
+    },
+  };
+}
 
 /** Byte length of base64 without allocating the decoded buffer. */
 export function base64ByteLength(data: string): number {
@@ -185,5 +298,30 @@ export function validateBody(raw: unknown): BodyResult {
     };
   }
 
-  return { ok: true, body: { mimeType, dataBase64, byteLength } };
+  /* The case key is what makes a repeated extraction safe: it identifies the
+     visa case, so a retry updates one liability record instead of minting a
+     second one. */
+  if (!isUuid(body.caseKey)) {
+    return {
+      ok: false,
+      code: "invalid_request",
+      message: "This visa case could not be identified. Reload the page and try again.",
+      status: 400,
+    };
+  }
+
+  const details = validateDetails(body.details);
+  if (!details.ok) return details;
+
+  return {
+    ok: true,
+    body: {
+      mimeType,
+      dataBase64,
+      byteLength,
+      caseKey: body.caseKey,
+      details: details.details,
+      sourceFilename: text(body.sourceFilename, 260),
+    },
+  };
 }

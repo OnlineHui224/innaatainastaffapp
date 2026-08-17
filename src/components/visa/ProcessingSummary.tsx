@@ -87,13 +87,24 @@ export function ProcessingSummary({
         {/* Responsibility */}
         <SectionLabel>Responsibility</SectionLabel>
         <Row icon={User} label="Selected Pilgrim" value={details.pilgrimName} isSet={!!details.pilgrimName} />
-        <Row
-          icon={Building2}
-          label={details.agentIsProposed ? 'Proposed Agent' : 'Responsible Agent'}
-          value={details.agentName}
-          isSet={!!details.agentName}
-          isCustom={details.agentIsProposed}
-        />
+        {/* A direct client has no agent, so asking for one would read as a gap
+            in the record rather than the deliberate absence it is. */}
+        {details.clientSource === 'direct' ? (
+          <Row
+            icon={Building2}
+            label="Responsibility"
+            value="Inna Ataina (direct client)"
+            isSet
+          />
+        ) : (
+          <Row
+            icon={Building2}
+            label={details.agentIsProposed ? 'Proposed Agent' : 'Responsible Agent'}
+            value={details.agentName}
+            isSet={!!details.agentName}
+            isCustom={details.agentIsProposed}
+          />
+        )}
 
         {/* Transportation — entitlement only */}
         <SectionLabel>Transportation</SectionLabel>

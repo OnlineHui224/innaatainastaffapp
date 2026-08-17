@@ -11,7 +11,20 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { VisaExtractionError, extractVisaIdentity } from '@/lib/visaExtraction';
+import {
+  VisaExtractionError,
+  extractVisaIdentity,
+  persistVisaRecord,
+  type VisaCaseSubmission,
+} from '@/lib/visaExtraction';
+import {
+  VisaRecordError,
+  confirmRecordReview,
+  linkPilgrim,
+  revertRecordToPending,
+  unlinkPilgrim,
+} from '@/lib/visaContractRecords';
+import type { VisaContractRecord } from '@/types/visaContract';
 import { logAudit } from '@/lib/audit';
 import { formatDateTime } from '@/lib/priority';
 import { WorkflowStepper } from '@/components/visa/WorkflowStepper';
@@ -31,6 +44,7 @@ import {
   type MatchPhase,
 } from '@/components/visa/PilgrimMatchPanel';
 import { ProcessingSummary } from '@/components/visa/ProcessingSummary';
+import { RecordStatusBar } from '@/components/visa/RecordStatusBar';
 import { ViewerReadOnly } from '@/components/visa/ViewerReadOnly';
 import { ProvenanceLadder, buildCaseProvenance } from '@/components/visa/ProvenanceLadder';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -68,6 +82,7 @@ function emptyDetails(): VisaCaseDetails {
     pilgrimId: null,
     pilgrimName: '',
     passportNumber: '',
+    clientSource: 'sub_agent',
     agentId: null,
     agentName: '',
     agentIsProposed: false,
@@ -86,6 +101,35 @@ function emptyDetails(): VisaCaseDetails {
     transportPackage: null,
     plannedOutboundDate: '',
     expectedReturnDate: '',
+    arrivalPort: '',
+  };
+}
+
+/**
+ * The operational half of the record, in the shape the server expects.
+ *
+ * Note what is not here: no user id. The Edge Function takes the actor from the
+ * verified session, never from this payload.
+ */
+function toSubmission(details: VisaCaseDetails): VisaCaseSubmission {
+  return {
+    clientSource: details.clientSource,
+    subAgentId: details.clientSource === 'direct' ? null : details.agentId,
+    agentName:
+      details.clientSource === 'direct'
+        ? 'Inna Ataina (direct client)'
+        : details.agentName || details.newAgent?.organisationName || '',
+    assignedStaffId: details.assignedStaffId,
+    visaCompany: details.visaCompany || null,
+    plannedDepartureDate: details.plannedOutboundDate || null,
+    expectedReturnDate: details.expectedReturnDate || null,
+    makkahHotelId: details.makkahHotelIsCustom ? null : details.makkahHotelId,
+    makkahHotelName: details.makkahHotelName || null,
+    madinahHotelId: details.madinahHotelIsCustom ? null : details.madinahHotelId,
+    madinahHotelName: details.madinahHotelName || null,
+    transportPackage: details.transportPackage,
+    transportSummary: transportPackageSummary(details.transportPackage) || null,
+    arrivalPort: details.arrivalPort || null,
   };
 }
 
@@ -138,6 +182,22 @@ export default function VisaLoggerPage() {
   const [staffOptions, setStaffOptions] = useState<ComboboxOption[]>([]);
 
   const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus>('idle');
+
+  /**
+   * The liability record for this case.
+   *
+   * Created the moment a document is read or a manual case is started, and
+   * updated in place from then on. `null` means no record exists yet, which is
+   * the one state in which the officer must not be told responsibility tracking
+   * has begun.
+   */
+  const [record, setRecord] = useState<VisaContractRecord | null>(null);
+  /** Identifies the visa case, so a retried extraction cannot create a second record. */
+  const [caseKey, setCaseKey] = useState<string>(() => crypto.randomUUID());
+  /** Set when extraction succeeded but the database write did not. */
+  const [persistFailed, setPersistFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
   const [alert, setAlert] = useState<{ tone: 'info' | 'warning' | 'critical' | 'success'; message: string } | null>(
     null,
   );
@@ -202,16 +262,19 @@ export default function VisaLoggerPage() {
   const errors: Record<string, string> = {};
   const missingFields: string[] = [];
 
-  /* An Existing Pilgrim is deliberately NOT required here. The pilgrim is
-     matched later, from the reviewed passport number — see `runPilgrimMatch`.
-     `pilgrimId` remains required before the final save. */
-  if (!details.agentName && !details.agentIsProposed) {
-    errors.agentId = 'Please select a responsible agent';
-    missingFields.push('Responsible Agent');
-  }
-  if (details.agentIsProposed && details.newAgent && !details.newAgent.organisationName.trim()) {
-    errors.agentId = 'Please enter the new agent name';
-    missingFields.push('New Agent Name');
+  /* An Existing Pilgrim is deliberately NOT required — not here, and not at
+     any later point. The pilgrim is matched after the identity is reviewed,
+     and a traveller who is not yet in HajjERP must never prevent the company
+     from recording a visa it has issued. */
+  if (details.clientSource === 'sub_agent') {
+    if (!details.agentName && !details.agentIsProposed) {
+      errors.agentId = 'Please select a responsible agent';
+      missingFields.push('Responsible Agent');
+    }
+    if (details.agentIsProposed && details.newAgent && !details.newAgent.organisationName.trim()) {
+      errors.agentId = 'Please enter the new agent name';
+      missingFields.push('New Agent Name');
+    }
   }
   if (!details.visaCompany.trim()) {
     errors.visaCompany = 'Please enter the visa company';
@@ -271,10 +334,43 @@ export default function VisaLoggerPage() {
   }, []);
 
   // ── Explicit field verification ────────────────────────────────────
-  /** An edit records the new value and clears any prior verification. */
-  const handleFieldEdit = useCallback((key: ExtractedFieldKey, value: string) => {
-    setExtraction((prev) => ({ ...prev, [key]: editFieldValue(prev[key], value) }));
-  }, []);
+  /**
+   * An edit records the new value and clears any prior verification.
+   *
+   * If the record was already confirmed, it returns to Pending Review: a
+   * confirmed record whose passport number has just changed is not confirmed
+   * any more. This is a deliberate staff edit, quite distinct from a retried
+   * extraction, which can never reach this path.
+   */
+  const handleFieldEdit = useCallback(
+    (key: ExtractedFieldKey, value: string) => {
+      let next: VisaExtractionResult | null = null;
+      setExtraction((prev) => {
+        next = { ...prev, [key]: editFieldValue(prev[key], value) };
+        return next;
+      });
+
+      if (record?.record_status === 'REVIEWED_CONFIRMED' && profile?.id && next) {
+        const edited = next;
+        void revertRecordToPending(record, edited, profile.id)
+          .then((updated) => {
+            setRecord(updated);
+            setAlert({
+              tone: 'warning',
+              message:
+                'This value changed, so the record has returned to Pending Review. Review all four values again to confirm it.',
+            });
+          })
+          .catch(() => {
+            setAlert({
+              tone: 'critical',
+              message: 'The record status could not be updated. Check your connection and try again.',
+            });
+          });
+      }
+    },
+    [record, profile?.id],
+  );
 
   /** The only route to a verified field. Officer and timestamp come from the session. */
   const handleFieldVerify = useCallback(
@@ -332,7 +428,7 @@ export default function VisaLoggerPage() {
          honest about what is happening — matching is NOT one of them, because
          matching happens after this identity has been reviewed. */
       setExtractionStatus('uploading');
-      const result = await extractVisaIdentity(file);
+      const result = await extractVisaIdentity(file, caseKey, toSubmission(details));
       setExtractionStatus('extracting');
 
       const extractedAt = result.extractedAt || new Date().toISOString();
@@ -364,15 +460,46 @@ export default function VisaLoggerPage() {
       setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
       setStep('review_extraction');
 
+      /* The liability record. A null one is not a detail to gloss over: the
+         extraction is usable, but nothing has been recorded, so the officer is
+         told plainly rather than left to assume the case is safe. */
+      setRecord(result.record);
+      setPersistFailed(result.record === null);
+
+      if (result.record) {
+        await logAudit({
+          action: result.reused ? 'visa_record_reused' : 'visa_record_created',
+          recordType: 'visa_contract_record',
+          recordId: result.record.id,
+          recordLabel: result.record.traveller_name || file.name,
+          newValue: {
+            entry_source: 'GEMINI',
+            record_status: result.record.record_status,
+            model: result.model,
+            client_source: result.record.client_source,
+          },
+          performedBy: profile?.id ?? null,
+          performedByName: profile?.full_name ?? '',
+        });
+      }
+
       const unread = Object.values(result.fields).filter((f) => f.value === null).length;
 
-      setAlert({
-        tone: unread > 0 ? 'warning' : 'info',
-        message:
-          unread > 0
-            ? `Extraction complete, but ${unread} of 4 values could not be read. Type those in from the document, then review every value against it.`
-            : 'Extraction complete. Nothing is reviewed yet — check each value against the document and mark it individually.',
-      });
+      setAlert(
+        result.record === null
+          ? {
+              tone: 'critical',
+              message:
+                'This Visa case is not yet saved to HajjERP. Retry saving — the extracted values are kept and the document will not be read again.',
+            }
+          : {
+              tone: unread > 0 ? 'warning' : 'info',
+              message:
+                unread > 0
+                  ? `Document extracted, but ${unread} of 4 values could not be read. Type those in from the document, then review every value against it.`
+                  : 'Document extracted. Nothing is reviewed yet — check each value against the document and mark it individually.',
+            },
+      );
     } catch (e) {
       setExtractionStatus('error');
       setAlert({
@@ -383,10 +510,79 @@ export default function VisaLoggerPage() {
             : 'AI extraction could not be completed. Enter the Visa details manually or try again.',
       });
     }
-  }, [file]);
+  }, [file, caseKey, details, profile?.id, profile?.full_name]);
 
-  /** Manual-entry path — used when extraction fails or the limit is exhausted. */
-  const startManualEntry = useCallback(() => {
+  /**
+   * Writes the record for a case whose extraction succeeded but whose first
+   * database write failed.
+   *
+   * Deliberately does NOT call Gemini again. The values already read are sent
+   * straight to the database, so a paid read is not spent twice and the officer
+   * does not lose corrections made while the warning was showing.
+   */
+  const retryPersist = useCallback(async () => {
+    if (!file) return;
+    setRetrying(true);
+    try {
+      const saved = await persistVisaRecord({
+        caseKey,
+        details: toSubmission(details),
+        entrySource: 'GEMINI',
+        fields: {
+          travellerName: {
+            value: extraction.passengerName.originalValue,
+            confidence: extraction.passengerName.confidence ?? 'low',
+          },
+          passportNumber: {
+            value: extraction.passportNumber.originalValue,
+            confidence: extraction.passportNumber.confidence ?? 'low',
+          },
+          visaNumber: {
+            value: extraction.visaNumber.originalValue,
+            confidence: extraction.visaNumber.confidence ?? 'low',
+          },
+          nationality: {
+            value: extraction.nationality.originalValue,
+            confidence: extraction.nationality.confidence ?? 'low',
+          },
+        },
+        extractedAt: extraction.extractedAt,
+        sourceFilename: file.name,
+        sourceMimeType: file.type,
+      });
+      setRecord(saved.record);
+      setPersistFailed(false);
+      setAlert({ tone: 'success', message: 'Visa case saved to HajjERP.' });
+      await logAudit({
+        action: 'visa_record_created',
+        recordType: 'visa_contract_record',
+        recordId: saved.record.id,
+        recordLabel: saved.record.traveller_name || file.name,
+        newValue: { entry_source: 'GEMINI', persisted_via: 'retry' },
+        performedBy: profile?.id ?? null,
+        performedByName: profile?.full_name ?? '',
+      });
+    } catch (e) {
+      setAlert({
+        tone: 'critical',
+        message:
+          e instanceof VisaExtractionError
+            ? e.message
+            : 'This Visa case is not yet saved to HajjERP. Retry saving.',
+      });
+    } finally {
+      setRetrying(false);
+    }
+  }, [file, caseKey, details, extraction, profile?.id, profile?.full_name]);
+
+  /**
+   * Manual-entry path — used whenever extraction is unavailable or refused.
+   *
+   * The record is created here too, so a case typed by hand carries the same
+   * liability weight as an extracted one. It is recorded as MANUAL, never
+   * dressed up as a document extraction.
+   */
+  const startManualEntry = useCallback(async () => {
     setManualEntry(true);
     setExtractionStatus('idle');
     setExtraction({
@@ -398,11 +594,69 @@ export default function VisaLoggerPage() {
     setCandidates([]);
     setCompletedSteps((prev) => new Set(prev).add('upload_visa'));
     setStep('review_extraction');
-    setAlert({
-      tone: 'info',
-      message: 'Manual entry. Type each value from the document, then review it explicitly.',
-    });
-  }, []);
+
+    try {
+      const saved = await persistVisaRecord({
+        caseKey,
+        details: toSubmission(details),
+        entrySource: 'MANUAL',
+        sourceFilename: file?.name ?? null,
+        sourceMimeType: file?.type ?? null,
+      });
+      setRecord(saved.record);
+      setPersistFailed(false);
+      setAlert({
+        tone: 'info',
+        message:
+          'Manual entry. The Visa case is recorded — type each value from the document, then review it explicitly.',
+      });
+      await logAudit({
+        action: saved.reused ? 'visa_record_reused' : 'visa_record_created',
+        recordType: 'visa_contract_record',
+        recordId: saved.record.id,
+        recordLabel: saved.record.traveller_name || file?.name || 'Manual visa case',
+        newValue: { entry_source: 'MANUAL', record_status: saved.record.record_status },
+        performedBy: profile?.id ?? null,
+        performedByName: profile?.full_name ?? '',
+      });
+    } catch (e) {
+      setPersistFailed(true);
+      setAlert({
+        tone: 'critical',
+        message:
+          e instanceof VisaExtractionError
+            ? e.message
+            : 'This Visa case is not yet saved to HajjERP. Retry saving.',
+      });
+    }
+  }, [caseKey, details, file, profile?.id, profile?.full_name]);
+
+  /** Retry for a manual case whose first write failed. No document is involved. */
+  const retryManualPersist = useCallback(async () => {
+    setRetrying(true);
+    try {
+      const saved = await persistVisaRecord({
+        caseKey,
+        details: toSubmission(details),
+        entrySource: 'MANUAL',
+        sourceFilename: file?.name ?? null,
+        sourceMimeType: file?.type ?? null,
+      });
+      setRecord(saved.record);
+      setPersistFailed(false);
+      setAlert({ tone: 'success', message: 'Visa case saved to HajjERP.' });
+    } catch (e) {
+      setAlert({
+        tone: 'critical',
+        message:
+          e instanceof VisaExtractionError
+            ? e.message
+            : 'This Visa case is not yet saved to HajjERP. Retry saving.',
+      });
+    } finally {
+      setRetrying(false);
+    }
+  }, [caseKey, details, file]);
 
   /**
    * Finds the HajjERP pilgrim this visa belongs to.
@@ -446,41 +700,87 @@ export default function VisaLoggerPage() {
   }, [extraction.passportNumber.value]);
 
   /**
-   * Records the officer's explicit choice.
+   * Records the officer's explicit choice of pilgrim.
    *
-   * This is the only route to a populated `pilgrimId`, and therefore the only
-   * route to a save. The reviewed visa identity is never overwritten by the
-   * matched record — the two are shown side by side and any difference stays
-   * visible.
+   * Linking is optional and never blocks anything. The reviewed visa identity is
+   * NOT overwritten by the matched pilgrim — what the visa says and what the
+   * pilgrim record says are separate facts, and quietly replacing one with the
+   * other would hide exactly the discrepancy an officer needs to see.
    */
-  const confirmPilgrimMatch = useCallback((candidate: MatchCandidate) => {
-    setDetails((prev) => ({
-      ...prev,
-      pilgrimId: candidate.id,
-      pilgrimName: candidate.full_name,
-    }));
-    setMatch({
-      status: 'exact_passport_match',
-      pilgrim: {
-        id: candidate.id,
-        full_name: candidate.full_name,
-        passport_number: candidate.passport_number,
-        visa_number: candidate.visa_number,
-        agent_name: candidate.agent_name,
-      },
-      conflicts: [],
-      alternatives: [],
-    });
-  }, []);
+  const confirmPilgrimMatch = useCallback(
+    async (candidate: MatchCandidate) => {
+      setDetails((prev) => ({
+        ...prev,
+        pilgrimId: candidate.id,
+        pilgrimName: candidate.full_name,
+      }));
+      setMatch({
+        status: 'exact_passport_match',
+        pilgrim: {
+          id: candidate.id,
+          full_name: candidate.full_name,
+          passport_number: candidate.passport_number,
+          visa_number: candidate.visa_number,
+          agent_name: candidate.agent_name,
+        },
+        conflicts: [],
+        alternatives: [],
+      });
 
-  const clearPilgrimMatch = useCallback(() => {
+      if (!record || !profile?.id) return;
+      try {
+        setRecord(await linkPilgrim(record.id, candidate.id, profile.id));
+        await logAudit({
+          action: 'visa_record_pilgrim_linked',
+          recordType: 'visa_contract_record',
+          recordId: record.id,
+          recordLabel: candidate.full_name,
+          newValue: { pilgrim_id: candidate.id, pilgrim_match_status: 'MATCHED' },
+          performedBy: profile.id,
+          performedByName: profile.full_name ?? '',
+        });
+      } catch (e) {
+        setAlert({
+          tone: 'critical',
+          message:
+            e instanceof VisaRecordError
+              ? `The pilgrim link could not be saved: ${e.message}`
+              : 'The pilgrim link could not be saved. Try again.',
+        });
+      }
+    },
+    [record, profile?.id, profile?.full_name],
+  );
+
+  /** Unlinks so a different pilgrim can be chosen. No pilgrim is ever deleted. */
+  const clearPilgrimMatch = useCallback(async () => {
     setDetails((prev) => ({ ...prev, pilgrimId: null, pilgrimName: '' }));
     setMatch({ status: 'no_match', pilgrim: null, conflicts: [], alternatives: [] });
     setMatchPhase('idle');
     setCandidates([]);
     setMatchError(null);
-  }, []);
 
+    if (!record || !profile?.id || record.pilgrim_match_status !== 'MATCHED') return;
+    try {
+      setRecord(await unlinkPilgrim(record.id, profile.id));
+    } catch {
+      setAlert({
+        tone: 'critical',
+        message: 'The pilgrim link could not be removed. Try again.',
+      });
+    }
+  }, [record, profile?.id]);
+
+  /**
+   * Advances to confirmation.
+   *
+   * A missing pilgrim link deliberately does NOT block this. Inna Ataina issued
+   * the visa and carries the exposure whether or not the traveller has been
+   * entered into Pilgrims yet, so the record must be completable regardless.
+   * What does block is an unreviewed identity, and a case with no database row
+   * behind it — confirming a record that does not exist would assert that
+   * responsibility tracking had begun when it had not.
+   */
   const goToConfirm = useCallback(() => {
     if (!reviewComplete) {
       setAlert({
@@ -489,29 +789,38 @@ export default function VisaLoggerPage() {
       });
       return;
     }
-    if (!details.pilgrimId) {
+    if (!record) {
       setAlert({
-        tone: 'warning',
-        message:
-          'Match this visa to a HajjERP pilgrim before continuing. A visa can only be saved against an existing pilgrim record.',
+        tone: 'critical',
+        message: 'This Visa case is not yet saved to HajjERP. Retry saving before confirming it.',
       });
       return;
     }
     setCompletedSteps((prev) => new Set(prev).add('review_extraction'));
     setStep('confirm_save');
     setAlert(null);
-  }, [reviewComplete, details.pilgrimId]);
+  }, [reviewComplete, record]);
 
   const backToReview = useCallback(() => setStep('review_extraction'), []);
 
   // ── Save ───────────────────────────────────────────────────────────
   const handleConfirmSave = useCallback(async () => {
-    if (!details.pilgrimId) {
-      setAlert({ tone: 'critical', message: 'No pilgrim is selected. Go back and select a pilgrim record.' });
+    /* A pilgrim link is NOT required. The record stands on its own — see
+       `goToConfirm`. What is required is a reviewed identity and a real row to
+       confirm. */
+    if (!record) {
+      setAlert({
+        tone: 'critical',
+        message: 'This Visa case is not yet saved to HajjERP. Retry saving before confirming it.',
+      });
       return;
     }
     if (!allRequiredVerified(extraction)) {
       setAlert({ tone: 'warning', message: 'Every extracted field must be verified before saving.' });
+      return;
+    }
+    if (!profile?.id) {
+      setAlert({ tone: 'critical', message: 'Your session has expired. Sign in again.' });
       return;
     }
 
@@ -570,13 +879,9 @@ export default function VisaLoggerPage() {
         });
       }
 
-      /* Entitlement only. The visa workflow no longer collects a route, vehicle
-         or price, so the old route/rate/override audit actions are not emitted
-         for new records — there is nothing of that kind to report. Historical
-         entries and the reference tables are untouched. */
-      const transportSummary = transportPackageSummary(details.transportPackage);
-
-      const makkahHotelName = details.makkahHotelName;
+      /* Custom hotels are still promoted into `hotel_references` here, exactly
+         as before. The transport summary and hotel names themselves now travel
+         with the record at creation time, not at save time. */
       if (details.makkahHotelIsCustom && details.makkahCustomHotel && isAdminOrHigher) {
         const { data: inserted } = await supabase
           .from('hotel_references')
@@ -603,7 +908,6 @@ export default function VisaLoggerPage() {
         }
       }
 
-      const madinahHotelName = details.madinahHotelName;
       if (details.madinahHotelIsCustom && details.madinahCustomHotel && isAdminOrHigher) {
         const { data: inserted } = await supabase
           .from('hotel_references')
@@ -631,33 +935,29 @@ export default function VisaLoggerPage() {
       }
 
 
-      const updateData: Record<string, unknown> = {
-        visa_number: extraction.visaNumber.value,
-        visa_company: details.visaCompany || null,
-        transportation: transportSummary || null,
-        makkah_hotel: makkahHotelName || null,
-        madinah_hotel: madinahHotelName || null,
-        contract_record_date: new Date().toISOString().split('T')[0],
-        expected_return_date: details.expectedReturnDate || null,
-        sub_agent_id: agentId,
-        updated_at: new Date().toISOString(),
-        updated_by: profile?.id ?? null,
-      };
+      /* The confirmation UPDATEs the record created at extraction. It never
+         inserts: one visa case is one liability record, and a second would
+         double-count the company's exposure.
 
-      const { error } = await supabase.from('pilgrims').update(updateData).eq('id', details.pilgrimId);
-      if (error) throw error;
+         The visa contract is NOT written into `pilgrims` any more. The register
+         is its own system of record; controlled synchronisation of approved
+         fields into the pilgrim operational record is a later milestone. */
+      const confirmed = await confirmRecordReview(record, extraction, profile.id);
+      setRecord(confirmed);
 
-      /* The verification trail travels with the audit entry, so who reviewed
+      /* The verification trail travels with the audit entry too, so who reviewed
          which value — and when — is recoverable after the fact. */
       await logAudit({
-        action: 'visa_record_saved',
-        recordType: 'pilgrim',
-        recordId: details.pilgrimId,
-        recordLabel: details.pilgrimName,
-        previousValue: { visa_number: null },
+        action: 'visa_record_confirmed',
+        recordType: 'visa_contract_record',
+        recordId: confirmed.id,
+        recordLabel: confirmed.traveller_name || confirmed.passport_number || 'Visa case',
+        previousValue: { record_status: 'PENDING_REVIEW' },
         newValue: {
-          visa_number: extraction.visaNumber.value,
-          visa_company: details.visaCompany,
+          record_status: 'REVIEWED_CONFIRMED',
+          entry_source: confirmed.entry_source,
+          pilgrim_match_status: confirmed.pilgrim_match_status,
+          client_source: confirmed.client_source,
           verified_fields: REQUIRED_VERIFICATION_KEYS.map((key) => ({
             field: key,
             value: extraction[key].value,
@@ -666,24 +966,33 @@ export default function VisaLoggerPage() {
             verified_at: extraction[key].verifiedAt,
           })),
         },
-        performedBy: profile?.id ?? null,
-        performedByName: profile?.full_name ?? '',
+        performedBy: profile.id,
+        performedByName: profile.full_name ?? '',
       });
 
       setSavedAt(new Date().toISOString());
       setCompletedSteps((prev) => new Set(prev).add('confirm_save'));
       setStep('confirm_save');
-      setAlert({ tone: 'success', message: 'Visa record saved.' });
+      setAlert({
+        tone: 'success',
+        message:
+          confirmed.pilgrim_match_status === 'MATCHED'
+            ? 'Visa & Contract record confirmed and linked to the pilgrim.'
+            : 'Visa & Contract record confirmed. It remains Pending Pilgrim Match, which does not affect the record.',
+      });
     } catch (e) {
       console.error('Save failed:', e);
       setAlert({
         tone: 'critical',
-        message: 'The visa record could not be saved. Check your connection and try again.',
+        message:
+          e instanceof VisaRecordError
+            ? `The visa record could not be confirmed: ${e.message}`
+            : 'The visa record could not be confirmed. Check your connection and try again.',
       });
     } finally {
       setSaving(false);
     }
-  }, [details, extraction, profile, isAdminOrHigher]);
+  }, [record, details, extraction, profile, isAdminOrHigher]);
 
   const handleProcessAnother = useCallback(() => {
     setDetails(emptyDetails());
@@ -699,6 +1008,11 @@ export default function VisaLoggerPage() {
     setCompletedSteps(new Set());
     setStep('case_details');
     setSavedAt('');
+    /* A new case gets a new key and no record. Reusing either would make the
+       next visa idempotent against the last one and silently return it. */
+    setRecord(null);
+    setPersistFailed(false);
+    setCaseKey(crypto.randomUUID());
   }, []);
 
   const handleViewPilgrim = useCallback(() => {
@@ -767,6 +1081,20 @@ export default function VisaLoggerPage() {
       <div className="mb-5 rounded-lg border border-slate-300 bg-white px-4 py-3">
         <WorkflowStepper currentStep={step} completedSteps={completedSteps} />
       </div>
+
+      {/* The record's live state, above everything it describes. Persistent:
+          an officer must be able to tell at any moment whether HajjERP is
+          actually holding this case. */}
+      {(record || persistFailed) && (
+        <div className="mb-4">
+          <RecordStatusBar
+            record={record}
+            persistFailed={persistFailed}
+            retrying={retrying}
+            onRetry={manualEntry && !file ? retryManualPersist : retryPersist}
+          />
+        </div>
+      )}
 
       {alert && (
         <div className="mb-4">
@@ -1055,15 +1383,33 @@ export default function VisaLoggerPage() {
                     })}
                   </ConfirmSection>
 
-                  {/* ── Matched HajjERP record — the row this save updates ── */}
-                  <ConfirmSection title="Matched HajjERP record" provenance="Matched">
-                    <ConfirmRow label="Pilgrim name">{match.pilgrim?.full_name || '—'}</ConfirmRow>
-                    <ConfirmRow label="Passport on record">
-                      <Identifier value={match.pilgrim?.passport_number ?? null} />
-                    </ConfirmRow>
-                    <ConfirmRow label="HajjERP record" className="sm:col-span-2">
-                      <Identifier value={details.pilgrimId} />
-                    </ConfirmRow>
+                  {/* ── Pilgrim link — optional, and shown as such ── */}
+                  <ConfirmSection
+                    title="Pilgrim link"
+                    provenance={details.pilgrimId ? 'Matched' : 'Pending'}
+                  >
+                    {details.pilgrimId ? (
+                      <>
+                        <ConfirmRow label="Pilgrim name">
+                          {match.pilgrim?.full_name || '—'}
+                        </ConfirmRow>
+                        <ConfirmRow label="Passport on record">
+                          <Identifier value={match.pilgrim?.passport_number ?? null} />
+                        </ConfirmRow>
+                        <ConfirmRow label="HajjERP pilgrim" className="sm:col-span-2">
+                          <Identifier value={details.pilgrimId} />
+                        </ConfirmRow>
+                      </>
+                    ) : (
+                      <ConfirmRow label="Status" className="sm:col-span-2">
+                        <span className="text-amber-800">Pending Pilgrim Match</span>
+                        <span className="mt-0.5 block text-xs font-normal text-slate-600">
+                          The traveller is not yet in Pilgrims. The visa record is still complete —
+                          Inna Ataina issued the visa and carries responsibility for it either way.
+                          It can be linked later.
+                        </span>
+                      </ConfirmRow>
+                    )}
                   </ConfirmSection>
                 </Panel>
 
@@ -1078,8 +1424,11 @@ export default function VisaLoggerPage() {
                   <Button
                     onClick={() => setConfirmDialog(true)}
                     loading={saving}
-                    /* A visa is never saved without a confirmed HajjERP pilgrim. */
-                    disabled={!reviewComplete || !details.pilgrimId}
+                    /* A pilgrim link is deliberately NOT required. What is
+                       required is a reviewed identity and a real record to
+                       confirm — confirming a case with no row behind it would
+                       claim responsibility tracking had begun when it had not. */
+                    disabled={!reviewComplete || !record}
                     icon={<Save className="h-4 w-4" aria-hidden="true" />}
                   >
                     Confirm and save visa record
@@ -1093,7 +1442,7 @@ export default function VisaLoggerPage() {
           <div className="space-y-5 xl:col-span-1">
             <Panel
               title="Case state"
-              description="AI Extracted → Human Reviewed → Matched to HajjERP → Saved. These stages are never collapsed into one another."
+              description="Extracted → Reviewed → Matched to HajjERP → Recorded. These stages are never collapsed into one another, and the pilgrim link is optional."
             >
               <ProvenanceLadder provenance={caseProvenance} />
             </Panel>

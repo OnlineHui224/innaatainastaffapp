@@ -153,6 +153,14 @@ export interface VisaCaseDetails {
   pilgrimId: string | null;
   pilgrimName: string;
   passportNumber: string;
+  /**
+   * Whose client this traveller is.
+   *
+   * Inna Ataina carries the exposure either way — it issued the visa — but the
+   * two aggregate differently for Sub-Agent accountability, so they are
+   * recorded distinctly. A direct client carries no Sub-Agent.
+   */
+  clientSource: ClientSource;
   agentId: string | null;
   agentName: string;
   agentIsProposed: boolean;
@@ -176,7 +184,17 @@ export interface VisaCaseDetails {
   transportPackage: TransportPackage | null;
   plannedOutboundDate: string;
   expectedReturnDate: string;
+  /**
+   * The planned port of entry into Saudi Arabia.
+   *
+   * A plan, not a movement. Confirming an actual arrival remains a separate,
+   * explicit staff action on the pilgrim record.
+   */
+  arrivalPort: string;
 }
+
+/** Whose client the traveller is. Mirrors `visa_contract_records.client_source`. */
+export type ClientSource = 'direct' | 'sub_agent';
 
 // ── Extraction types (unchanged) ──
 export type ExtractionStatus =

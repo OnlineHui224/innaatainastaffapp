@@ -6,15 +6,17 @@ import {
   SheetsError,
   appendRow,
   attachRecordMetadata,
-  findRowsByRecordId,
-  listTabs,
+  findMetadataRows,
   preflightDateCells,
   readIdentifierColumns,
+  readWorkbook,
   updateRow,
 } from "./sheets.ts";
 import {
+  type MetadataRowLocation,
   type SyncableRecord,
   buildRegisterRow,
+  describeDateCells,
   findBusinessMatches,
   isProtectedTab,
   monthTabFor,
@@ -53,9 +55,17 @@ import {
  *
  * ROW IDENTITY
  * ------------
- * Developer metadata on the row, keyed by the HajjERP record id. The workbook is
- * human-edited and staff insert rows, so a stored row number is a hint, not an
- * identity. See `resolveRow` for the order of resolution.
+ * Developer metadata on the row, keyed by the HajjERP record id, searched across
+ * the whole workbook. The workbook is human-edited and staff insert rows, so a
+ * stored row number is a hint, not an identity. See `resolveRow` for the order of
+ * resolution and for why a corrected departure month refuses rather than moves.
+ *
+ * PREFLIGHT
+ * ---------
+ * `mode: "preflight"` is strictly read-only and handled in its own branch, which
+ * returns before the synchronising path begins. It performs no database write, no
+ * audit entry and no Google write — including when the departure date or the month
+ * tab is missing. It reports; it does not record an operational outcome.
  */
 
 const ALLOWED_ORIGINS = new Set([
@@ -252,10 +262,89 @@ Deno.serve(async (req: Request) => {
   }
 
   const syncable = record as unknown as SyncableRecord;
-  const preflight = body.mode === "preflight";
 
   /* 3 ── Target tab, from the planned departure date only. */
   const expectedTab = monthTabFor(syncable.planned_departure_date);
+
+  /* 4 ── PREFLIGHT — read-only, and it returns before anything that writes.
+          Kept as its own branch rather than a flag threaded through the
+          synchronising path, so no write can be reached from here by accident:
+          `writeSyncState` and `audit` are simply not called below. A missing
+          departure date or a missing tab is reported as a finding, not recorded
+          as an operational outcome. */
+  if (body.mode === "preflight") {
+    try {
+      const accessToken = await getAccessToken(serviceAccountB64);
+      const client: SheetsClient = { spreadsheetId, accessToken, fetchImpl: fetch };
+      const workbook = await readWorkbook(client);
+
+      const tabTitle = expectedTab
+        ? resolveTabTitle(expectedTab, workbook.tabs.map((t) => t.title))
+        : null;
+      const inspectable = tabTitle !== null && !isProtectedTab(tabTitle);
+      const cells = inspectable ? await preflightDateCells(client, tabTitle) : null;
+
+      console.log(
+        JSON.stringify({
+          event: "sheet_sync_preflight",
+          record_id: recordId,
+          user_id: actor.id,
+          tab: tabTitle,
+          duration_ms: Date.now() - started,
+        }),
+      );
+
+      return json(
+        {
+          status: "PREFLIGHT",
+          readOnly: true,
+          /* The locale is reported because USER_ENTERED parses by the same rules
+             as the Sheets UI, so it is locale-dependent. This is the setting that
+             decides how our ISO dates are read. */
+          locale: workbook.locale,
+          timeZone: workbook.timeZone,
+          expectedTab,
+          resolvedTab: tabTitle,
+          tabExists: tabTitle !== null,
+          tabs: workbook.tabs.map((t) => t.title),
+          range: cells?.range ?? null,
+          sample: cells?.sample ?? null,
+          dateColumns: cells ? describeDateCells(cells.sample) : null,
+          notes: [
+            expectedTab
+              ? null
+              : "This record has no planned departure date, so no month tab could be derived. Nothing was written.",
+            tabTitle === null && expectedTab
+              ? `The ${expectedTab} tab does not exist in the office register. Nothing was written.`
+              : null,
+            "USER_ENTERED parses values by the same rules as typing into the Sheets UI, so it follows this workbook's locale. Verify the first live row before enabling automatic synchronisation.",
+          ].filter(Boolean),
+        },
+        200,
+        origin,
+      );
+    } catch (e) {
+      /* Still no write: a preflight that could not reach Google is a diagnostic
+         failure, not a synchronisation outcome. */
+      const code = e instanceof GoogleAuthError || e instanceof SheetsError ? e.code : "preflight_failed";
+      const message = e instanceof GoogleAuthError || e instanceof SheetsError
+        ? e.message
+        : "The office register could not be inspected. Try again shortly.";
+      console.error(
+        JSON.stringify({
+          event: "sheet_sync_preflight_failed",
+          record_id: recordId,
+          user_id: actor.id,
+          code,
+          duration_ms: Date.now() - started,
+        }),
+      );
+      return json({ status: "PREFLIGHT_FAILED", readOnly: true, code, message }, 200, origin);
+    }
+  }
+
+  /* ── Everything below synchronises and may write. ─────────────────────────── */
+
   if (!expectedTab) {
     const message =
       "This visa has no planned departure date, so its office-register month cannot be determined.";
@@ -267,7 +356,8 @@ Deno.serve(async (req: Request) => {
     const accessToken = await getAccessToken(serviceAccountB64);
     const client: SheetsClient = { spreadsheetId, accessToken, fetchImpl: fetch };
 
-    const tabs = await listTabs(client);
+    const workbook = await readWorkbook(client);
+    const tabs = workbook.tabs;
     const tabTitle = resolveTabTitle(expectedTab, tabs.map((t) => t.title));
 
     if (!tabTitle) {
@@ -291,21 +381,32 @@ Deno.serve(async (req: Request) => {
 
     const sheetId = tabs.find((t) => t.title === tabTitle)?.sheetId ?? -1;
 
-    if (preflight) {
-      /* Read-only. Reports how the register currently stores its dates so the
-         first live write can be checked before it happens. */
-      const sample = await preflightDateCells(client, tabTitle);
-      return json({ status: "PREFLIGHT", tab: tabTitle, ...sample }, 200, origin);
-    }
+    /* 5 ── Which row this record owns.
+            The metadata search covers the WHOLE workbook, not just this tab: a
+            record whose departure month was corrected still owns its old row, and
+            a tab-scoped search would not see it, append, and leave two register
+            rows for one visa. Tab titles are attached so a cross-month refusal
+            can name the month the row is actually on. */
+    const tagged = await findMetadataRows(client, syncable.id);
+    const metadataRows: MetadataRowLocation[] = tagged.map((hit) => ({
+      sheetId: hit.sheetId,
+      tabTitle: tabs.find((t) => t.sheetId === hit.sheetId)?.title ?? null,
+      rowIndex: hit.rowIndex,
+    }));
 
-    /* 4 ── Which row this record owns. Metadata first, business identity next,
-            append only when neither found anything. */
-    const metadataRowIndices = await findRowsByRecordId(client, sheetId, syncable.id);
-    const businessMatchRowIndices = metadataRowIndices.length > 0
+    /* The identity scan runs only when nothing owns this record yet — and it is
+       skipped entirely for a cross-month or duplicate refusal, so no read is
+       wasted on a decision already made. */
+    const businessMatchRowIndices = metadataRows.length > 0
       ? []
       : findBusinessMatches(await readIdentifierColumns(client, tabTitle), syncable);
 
-    const resolution = resolveRow({ metadataRowIndices, businessMatchRowIndices });
+    const resolution = resolveRow({
+      targetSheetId: sheetId,
+      targetTabTitle: tabTitle,
+      metadataRows,
+      businessMatchRowIndices,
+    });
 
     if (resolution.action === "conflict") {
       await writeSyncState(
@@ -314,7 +415,16 @@ Deno.serve(async (req: Request) => {
       );
       await audit("visa_contract_sheet_sync_failed", syncable, actor, {
         outcome: "conflict",
+        /* Named, because the three refusals need different office actions:
+           delete a duplicate tag, resolve a month change, or de-duplicate a
+           traveller entered twice. */
+        conflict: metadataRows.length > 1
+          ? "duplicate_metadata"
+          : metadataRows.length === 1
+            ? "cross_month_ownership"
+            : "duplicate_business_identity",
         tab: tabTitle,
+        owning_tab: metadataRows.length === 1 ? metadataRows[0].tabTitle : null,
         reason: resolution.reason,
       });
       return json({ status: "SYNC_FAILED", tab: tabTitle, message: resolution.reason }, 200, origin);

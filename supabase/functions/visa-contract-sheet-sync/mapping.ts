@@ -65,8 +65,15 @@ export interface SyncableRecord {
   arrival_port: string | null;
 }
 
-/** The label a direct company client carries in the AGENT NAME column. */
-export const DIRECT_CLIENT_LABEL = 'Inna Ataina (direct client)';
+/**
+ * What a direct company client is called in the register's AGENT NAME column.
+ *
+ * Deliberately the office's own established spelling, NOT the HajjERP screen
+ * label "Inna Ataina (direct client)". The register is filtered and reported on
+ * by agent name, so introducing a second spelling would split one responsibility
+ * group into two and quietly break the office's own totals.
+ */
+export const DIRECT_CLIENT_SHEET_LABEL = 'Inna-Ataina';
 
 /**
  * The month tab a visa belongs to.
@@ -104,9 +111,14 @@ export function isProtectedTab(title: string): boolean {
 /**
  * A cell value for the sheet.
  *
- * Dates are written as ISO `YYYY-MM-DD` with `USER_ENTERED`, which Sheets parses
- * into a real date value regardless of the workbook's locale — so the rows sort
- * and filter with the historical ones instead of sitting beside them as text.
+ * Dates go out as ISO `YYYY-MM-DD` with `USER_ENTERED`, so Sheets stores a real
+ * date value and the rows sort and filter with the historical ones instead of
+ * sitting beside them as text.
+ *
+ * `USER_ENTERED` parses exactly as typing into the Sheets UI does, which means it
+ * follows the workbook's locale — this is NOT locale-independent. ISO is the form
+ * least likely to be misread, but the only way to know how this workbook treats
+ * it is to look: run the read-only preflight, then verify the first live row.
  */
 function dateCell(value: string | null): string {
   if (!value) return '';
@@ -119,7 +131,7 @@ function textCell(value: string | null): string {
 
 /** Who carries responsibility, as the register spells it. */
 export function agentNameFor(record: SyncableRecord): string {
-  if (record.client_source === 'direct') return DIRECT_CLIENT_LABEL;
+  if (record.client_source === 'direct') return DIRECT_CLIENT_SHEET_LABEL;
   return textCell(record.agent_name_snapshot);
 }
 
@@ -193,39 +205,74 @@ export type RowResolution =
   | { action: 'append' }
   | { action: 'conflict'; reason: string };
 
+/** Where a `hajjerp_record_id` tag was found in the workbook. */
+export interface MetadataRowLocation {
+  sheetId: number;
+  /** The tab's title, when it resolved against the workbook's own tab list. */
+  tabTitle: string | null;
+  rowIndex: number;
+}
+
 /**
  * Which row this record owns, if any.
  *
  * Order matters and is deliberate:
  *
- *   1. Developer metadata. Once a row carries this record's id it belongs to
+ *   1. Developer metadata, resolved across the WHOLE workbook — not just the tab
+ *      we are about to write. Once a row carries this record's id it belongs to
  *      this record permanently, and it keeps belonging to it after staff insert
- *      or delete rows above — which a stored row number cannot survive. This is
+ *      or delete rows above, which a stored row number cannot survive. This is
  *      also why a corrected visa or passport number does NOT become a conflict:
  *      ownership was established before the identifiers changed.
  *   2. Business identity, for a first sync or for recovering from an append
  *      that reached Google but whose result never reached HajjERP.
  *   3. Append, only when neither found anything.
  *
- * Anything ambiguous refuses rather than guesses. Overwriting the wrong row in a
- * live office register is worse than a synchronisation that waits for a person.
+ * Searching the whole workbook at step 1 is what stops a corrected departure
+ * month from duplicating a traveller. A record synced to AUG whose departure
+ * moves to SEPT has no business-identity match in SEPT, so a search scoped to the
+ * target tab would find nothing, append, and leave the company holding two
+ * register rows for one visa. Instead its AUG row is found and the month change
+ * is refused for a person to resolve.
+ *
+ * Anything ambiguous refuses rather than guesses. Overwriting — or duplicating —
+ * a row in a live office register is worse than a sync that waits for a person.
+ * Moving a row between tabs is deliberately NOT automated in M2.
  */
 export function resolveRow(input: {
-  metadataRowIndices: number[];
+  targetSheetId: number;
+  targetTabTitle: string;
+  metadataRows: MetadataRowLocation[];
   businessMatchRowIndices: number[];
 }): RowResolution {
-  const { metadataRowIndices, businessMatchRowIndices } = input;
+  const { targetSheetId, targetTabTitle, metadataRows, businessMatchRowIndices } = input;
 
-  if (metadataRowIndices.length === 1) {
-    return { action: 'update', rowIndex: metadataRowIndices[0], source: 'metadata' };
-  }
-  if (metadataRowIndices.length > 1) {
+  /* Checked before anything else: two tags anywhere in the workbook means the
+     register already disagrees with itself, and nothing should be written until
+     that is settled. */
+  if (metadataRows.length > 1) {
     return {
       action: 'conflict',
       reason:
         'More than one register row is tagged with this visa record. Resolve the duplicate in the office register, then retry.',
     };
   }
+
+  if (metadataRows.length === 1) {
+    const owned = metadataRows[0];
+    if (owned.sheetId === targetSheetId) {
+      return { action: 'update', rowIndex: owned.rowIndex, source: 'metadata' };
+    }
+    /* The record owns a row on another month's tab. Neither appending here nor
+       writing there is safe, so this stops and says exactly what changed. */
+    return {
+      action: 'conflict',
+      reason: owned.tabTitle
+        ? `This Visa Contract is already linked to the ${owned.tabTitle} office-register row, but its confirmed departure date now belongs to ${targetTabTitle}. Resolve the month change before retrying.`
+        : `This Visa Contract is already linked to an office-register row on another tab, but its confirmed departure date now belongs to ${targetTabTitle}. Resolve the month change before retrying.`,
+    };
+  }
+
   if (businessMatchRowIndices.length === 1) {
     return {
       action: 'update',
@@ -251,6 +298,81 @@ export function rowRange(tabTitle: string, rowIndex: number): string {
 /** Sheets requires quoting for titles that are not plain words. */
 export function quoteTab(title: string): string {
   return /^[A-Za-z0-9_]+$/.test(title) ? title : `'${title.replace(/'/g, "''")}'`;
+}
+
+/* ── Preflight classification ───────────────────────────────────────────────
+   Pure reading of what the register already holds. Writes nothing, decides
+   nothing — it exists so a person can look before the first live write. */
+
+/** The three date columns of the register, by position in a row. */
+export const DATE_SAMPLE_COLUMNS = [
+  { index: 0, column: 'A', header: 'DATE' },
+  { index: 5, column: 'F', header: 'DEPARTURE DATE' },
+  { index: 6, column: 'G', header: 'ARRIVAL DATE' },
+] as const;
+
+/**
+ * What one cell actually holds, read with `UNFORMATTED_VALUE`.
+ *
+ * This is the whole point of the preflight: under that render option a real date
+ * comes back as a serial number and a date-shaped string comes back as a string,
+ * so the two are finally distinguishable.
+ */
+export type CellKind = 'date_value' | 'text' | 'empty' | 'other';
+
+export function classifyCell(value: unknown): CellKind {
+  if (value === null || value === undefined || value === '') return 'empty';
+  if (typeof value === 'number') return Number.isFinite(value) ? 'date_value' : 'other';
+  if (typeof value === 'string') return 'text';
+  return 'other';
+}
+
+export interface DateColumnReport {
+  column: string;
+  expectedHeader: string;
+  /** The header the workbook actually has there, so a mismatch is visible. */
+  actualHeader: string | null;
+  kinds: CellKind[];
+  samples: unknown[];
+  verdict: 'date_values' | 'text' | 'mixed' | 'no_data';
+}
+
+/**
+ * How the register currently stores each of its three date columns.
+ *
+ * `text` is the answer that matters. It means the historical rows are date-shaped
+ * strings, so a row written as a real date value would sort and filter
+ * differently from every row above it. That is a decision about the register, not
+ * something to resolve in code.
+ *
+ * @param sample rows from `A1:G…`, where the first row is the header row.
+ */
+export function describeDateCells(sample: unknown[][]): DateColumnReport[] {
+  const header = sample[0] ?? [];
+  const dataRows = sample.slice(1);
+
+  return DATE_SAMPLE_COLUMNS.map(({ index, column, header: expectedHeader }) => {
+    const samples = dataRows.map((row) => row?.[index] ?? null);
+    const kinds = samples.map(classifyCell);
+    const present = kinds.filter((kind) => kind !== 'empty');
+    const actual = header[index];
+
+    return {
+      column,
+      expectedHeader,
+      actualHeader: typeof actual === 'string' ? actual : actual == null ? null : String(actual),
+      kinds,
+      samples,
+      verdict:
+        present.length === 0
+          ? 'no_data'
+          : present.every((kind) => kind === 'date_value')
+            ? 'date_values'
+            : present.every((kind) => kind === 'text')
+              ? 'text'
+              : 'mixed',
+    };
+  });
 }
 
 /**

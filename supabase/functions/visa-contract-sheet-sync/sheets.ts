@@ -74,38 +74,65 @@ async function call(
   return text ? JSON.parse(text) : {};
 }
 
-/** Tab titles and their sheet ids. Used to decide whether a month tab exists. */
-export async function listTabs(
-  client: SheetsClient,
-): Promise<{ title: string; sheetId: number }[]> {
-  const payload = await call(
-    client,
-    '?fields=sheets.properties(title,sheetId)',
-    { method: 'GET' },
-  );
-  const sheets = (payload.sheets ?? []) as { properties?: { title?: string; sheetId?: number } }[];
-  return sheets
-    .map((sheet) => ({
-      title: sheet.properties?.title ?? '',
-      sheetId: Number(sheet.properties?.sheetId ?? -1),
-    }))
-    .filter((sheet) => sheet.title !== '' && sheet.sheetId >= 0);
+export interface WorkbookTab {
+  title: string;
+  sheetId: number;
+}
+
+export interface Workbook {
+  /** The workbook's locale, e.g. `en_GB`. Governs how USER_ENTERED parses. */
+  locale: string | null;
+  timeZone: string | null;
+  tabs: WorkbookTab[];
 }
 
 /**
- * Rows in a tab whose developer metadata carries this record's id.
+ * The workbook's tabs and its parsing settings, in one call.
  *
- * This is the authoritative row identity. Sheets keeps developer metadata
- * attached to the row itself, so it survives staff inserting or deleting rows
- * above it — which a stored row number does not.
- *
- * @returns zero-based row indices within the given tab.
+ * The locale is fetched alongside the tabs rather than only for the preflight,
+ * because it is what decides how `USER_ENTERED` reads a date — and one request is
+ * cheaper than two.
  */
-export async function findRowsByRecordId(
+export async function readWorkbook(client: SheetsClient): Promise<Workbook> {
+  const payload = await call(
+    client,
+    '?fields=properties(locale,timeZone),sheets.properties(title,sheetId)',
+    { method: 'GET' },
+  );
+
+  const properties = (payload.properties ?? {}) as { locale?: string; timeZone?: string };
+  const sheets = (payload.sheets ?? []) as { properties?: { title?: string; sheetId?: number } }[];
+
+  return {
+    locale: properties.locale ?? null,
+    timeZone: properties.timeZone ?? null,
+    tabs: sheets
+      .map((sheet) => ({
+        title: sheet.properties?.title ?? '',
+        sheetId: Number(sheet.properties?.sheetId ?? -1),
+      }))
+      .filter((sheet) => sheet.title !== '' && sheet.sheetId >= 0),
+  };
+}
+
+/**
+ * Every row in the workbook whose developer metadata carries this record's id.
+ *
+ * This is the authoritative row identity. Sheets keeps developer metadata attached
+ * to the row itself, so it survives staff inserting or deleting rows above — which
+ * a stored row number does not.
+ *
+ * Deliberately NOT scoped to the tab about to be written. A record whose departure
+ * month was corrected still owns its old row, and a search that could not see it
+ * would append a duplicate. The caller decides what to do about a row on another
+ * tab; this function's job is to find it.
+ *
+ * @returns the sheet id and zero-based row index of each tagged row.
+ */
+export async function findMetadataRows(
   client: SheetsClient,
-  sheetId: number,
   recordId: string,
-): Promise<number[]> {
+): Promise<{ sheetId: number; rowIndex: number }[]> {
   const payload = await call(client, '/developerMetadata:search', {
     method: 'POST',
     body: JSON.stringify({
@@ -139,10 +166,10 @@ export async function findRowsByRecordId(
       (range): range is { sheetId: number; dimension: string; startIndex: number } =>
         Boolean(range) &&
         range?.dimension === 'ROWS' &&
-        Number(range?.sheetId) === sheetId &&
+        Number.isFinite(Number(range?.sheetId)) &&
         Number.isFinite(Number(range?.startIndex)),
     )
-    .map((range) => Number(range.startIndex));
+    .map((range) => ({ sheetId: Number(range.sheetId), rowIndex: Number(range.startIndex) }));
 }
 
 /** The two identifier columns of a tab, for the business-identity scan. */
@@ -180,7 +207,10 @@ export async function readRow(
  * `INSERT_ROWS` matters: it inserts rather than writing over whatever sits below
  * the detected table, so an append can never overwrite a historical row.
  * `USER_ENTERED` matters too — it lets Sheets parse the ISO dates into real date
- * values, so the new row sorts and filters with the existing ones.
+ * values, so the new row sorts and filters with the existing ones. It parses by
+ * the same rules as typing into the Sheets UI, so it follows the workbook's
+ * locale; the preflight reports that locale, and the first live row must be
+ * verified rather than assumed.
  */
 export async function appendRow(
   client: SheetsClient,
@@ -268,6 +298,9 @@ export async function attachRecordMetadata(
  * Run before the first live write. `UNFORMATTED_VALUE` returns a serial number
  * for a real date and a string for text, which is exactly the distinction that
  * decides whether our rows will sort alongside the historical ones.
+ *
+ * A GET, and the only Sheets call the preflight makes besides reading the
+ * workbook properties. Nothing on this path writes.
  */
 export async function preflightDateCells(
   client: SheetsClient,

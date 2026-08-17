@@ -17,15 +17,20 @@ import {
   SheetsError,
   appendRow,
   attachRecordMetadata,
-  findRowsByRecordId,
-  listTabs,
+  findMetadataRows,
   preflightDateCells,
   readIdentifierColumns,
   readRow,
+  readWorkbook,
   updateRow,
 } from './sheets.ts';
 import { GoogleAuthError, parseServiceAccount } from './googleAuth.ts';
-import { OFFICE_REGISTER_COLUMNS, ROW_METADATA_KEY, buildRegisterRow } from './mapping.ts';
+import {
+  OFFICE_REGISTER_COLUMNS,
+  ROW_METADATA_KEY,
+  buildRegisterRow,
+  describeDateCells,
+} from './mapping.ts';
 import type { SyncableRecord } from './mapping.ts';
 
 let passed = 0;
@@ -81,6 +86,7 @@ function mock(handler: (url: string, init: RequestInit) => { status?: number; bo
 const SPREADSHEET_ID = '1AbCdEfGhIjKlMnOpQrStUvWxYz';
 const RECORD_ID = '9c3b2f10-77aa-4c1e-9c53-4f7d0d51a111';
 const AUG_SHEET_ID = 812345;
+const SEPT_SHEET_ID = 998877;
 
 function clientWith(fetchImpl: SheetsClient['fetchImpl']): SheetsClient {
   return { spreadsheetId: SPREADSHEET_ID, accessToken: 'ya29.mock-access-token', fetchImpl };
@@ -107,27 +113,38 @@ const RECORD: SyncableRecord = {
 
 {
   const { calls, fetchImpl } = mock(() => ({
-    body: { sheets: [{ properties: { title: 'Sheet1', sheetId: 0 } }, { properties: { title: 'AUG', sheetId: AUG_SHEET_ID } }] },
+    body: {
+      properties: { locale: 'en_GB', timeZone: 'Africa/Lagos' },
+      sheets: [{ properties: { title: 'Sheet1', sheetId: 0 } }, { properties: { title: 'AUG', sheetId: AUG_SHEET_ID } }],
+    },
   }));
-  const tabs = await listTabs(clientWith(fetchImpl));
+  const workbook = await readWorkbook(clientWith(fetchImpl));
 
-  eq('the tab list comes back with titles and ids', tabs, [
+  eq('the tab list comes back with titles and ids', workbook.tabs, [
     { title: 'Sheet1', sheetId: 0 },
     { title: 'AUG', sheetId: AUG_SHEET_ID },
   ]);
+  /* The locale is read because USER_ENTERED parses by the same rules as the
+     Sheets UI, so it decides how our ISO dates are interpreted. */
+  eq('the workbook locale is read', workbook.locale, 'en_GB');
+  eq('and its time zone', workbook.timeZone, 'Africa/Lagos');
   check('every request carries the bearer token', calls[0].headers.Authorization === 'Bearer ya29.mock-access-token');
   check('every request targets the configured spreadsheet', calls[0].url.includes(SPREADSHEET_ID));
-  check('the tab list is a read', calls[0].method === 'GET');
+  check('the workbook read is a GET', calls[0].method === 'GET');
   check(
     'only the properties needed are requested',
-    calls[0].url.includes('fields=sheets.properties(title,sheetId)'),
+    calls[0].url.includes('fields=properties(locale,timeZone),sheets.properties(title,sheetId)'),
   );
+  check('one request, not two, for tabs and settings', calls.length === 1);
   check('the spreadsheet id never appears in a request body', calls.every((call) => !JSON.stringify(call.body ?? {}).includes(SPREADSHEET_ID)));
 }
 
 {
   const { fetchImpl } = mock(() => ({ body: { sheets: [{ properties: { title: '', sheetId: 5 } }, {}] } }));
-  eq('malformed tab entries are dropped rather than addressed', await listTabs(clientWith(fetchImpl)), []);
+  const workbook = await readWorkbook(clientWith(fetchImpl));
+  eq('malformed tab entries are dropped rather than addressed', workbook.tabs, []);
+  eq('an absent locale is reported as unknown, not guessed', workbook.locale, null);
+  eq('and so is an absent time zone', workbook.timeZone, null);
 }
 
 /* ── Developer metadata: the row identity ──────────────────────────────────── */
@@ -146,9 +163,9 @@ const RECORD: SyncableRecord = {
       ],
     },
   }));
-  const rows = await findRowsByRecordId(clientWith(fetchImpl), AUG_SHEET_ID, RECORD_ID);
+  const rows = await findMetadataRows(clientWith(fetchImpl), RECORD_ID);
 
-  eq('a tagged row is found by the record id', rows, [56]);
+  eq('a tagged row is found by the record id', rows, [{ sheetId: AUG_SHEET_ID, rowIndex: 56 }]);
   check('the search is a POST to developerMetadata:search', calls[0].method === 'POST' && calls[0].url.endsWith('/developerMetadata:search'));
   const lookup = (calls[0].body as { dataFilters: { developerMetadataLookup: Record<string, string> }[] })
     .dataFilters[0].developerMetadataLookup;
@@ -158,20 +175,52 @@ const RECORD: SyncableRecord = {
 }
 
 {
-  /* Metadata is searched across the whole document, so a hit on another month's
-     tab must not be mistaken for a row in the tab being written. */
+  /*
+   * The search covers the WHOLE workbook, and a hit on another month's tab must
+   * reach the caller rather than be filtered away. This is the correction that
+   * stops a corrected departure month from duplicating a traveller: scoped to the
+   * target tab, the old row would be invisible and the sync would append.
+   */
   const { fetchImpl } = mock(() => ({
     body: {
       matchedDeveloperMetadata: [
-        { developerMetadata: { location: { dimensionRange: { sheetId: 999, dimension: 'ROWS', startIndex: 3 } } } },
-        { developerMetadata: { location: { dimensionRange: { sheetId: AUG_SHEET_ID, dimension: 'ROWS', startIndex: 56 } } } },
+        { developerMetadata: { location: { dimensionRange: { sheetId: SEPT_SHEET_ID, dimension: 'ROWS', startIndex: 3 } } } },
       ],
     },
   }));
   eq(
-    'a tagged row on a different tab is not treated as a row on this one',
-    await findRowsByRecordId(clientWith(fetchImpl), AUG_SHEET_ID, RECORD_ID),
-    [56],
+    'a tagged row on a different tab is reported, not discarded',
+    await findMetadataRows(clientWith(fetchImpl), RECORD_ID),
+    [{ sheetId: SEPT_SHEET_ID, rowIndex: 3 }],
+  );
+}
+
+{
+  const { calls, fetchImpl } = mock(() => ({ body: {} }));
+  await findMetadataRows(clientWith(fetchImpl), RECORD_ID);
+  const filter = (calls[0].body as { dataFilters: { developerMetadataLookup: Record<string, unknown> }[] })
+    .dataFilters[0].developerMetadataLookup;
+  check(
+    'the search is not scoped to a sheet, so nothing is hidden from the caller',
+    !('locationType' in filter) && !JSON.stringify(calls[0].body).includes('sheetId'),
+  );
+}
+
+{
+  /* Tags on two different tabs must both surface, so the caller can tell a
+     duplicate apart from a month change. */
+  const { fetchImpl } = mock(() => ({
+    body: {
+      matchedDeveloperMetadata: [
+        { developerMetadata: { location: { dimensionRange: { sheetId: AUG_SHEET_ID, dimension: 'ROWS', startIndex: 56 } } } },
+        { developerMetadata: { location: { dimensionRange: { sheetId: SEPT_SHEET_ID, dimension: 'ROWS', startIndex: 4 } } } },
+      ],
+    },
+  }));
+  eq(
+    'tags across two tabs are both reported',
+    await findMetadataRows(clientWith(fetchImpl), RECORD_ID),
+    [{ sheetId: AUG_SHEET_ID, rowIndex: 56 }, { sheetId: SEPT_SHEET_ID, rowIndex: 4 }],
   );
 }
 
@@ -186,7 +235,7 @@ const RECORD: SyncableRecord = {
   }));
   eq(
     'metadata that is not attached to a row is ignored',
-    await findRowsByRecordId(clientWith(fetchImpl), AUG_SHEET_ID, RECORD_ID),
+    await findMetadataRows(clientWith(fetchImpl), RECORD_ID),
     [],
   );
 }
@@ -195,7 +244,7 @@ const RECORD: SyncableRecord = {
   const { fetchImpl } = mock(() => ({ body: {} }));
   eq(
     'an untagged record finds nothing, which is what sends it to identity matching',
-    await findRowsByRecordId(clientWith(fetchImpl), AUG_SHEET_ID, RECORD_ID),
+    await findMetadataRows(clientWith(fetchImpl), RECORD_ID),
     [],
   );
 }
@@ -213,8 +262,8 @@ const RECORD: SyncableRecord = {
   }));
   eq(
     'duplicate tagged rows are both reported so the caller can refuse',
-    await findRowsByRecordId(clientWith(fetchImpl), AUG_SHEET_ID, RECORD_ID),
-    [56, 71],
+    await findMetadataRows(clientWith(fetchImpl), RECORD_ID),
+    [{ sheetId: AUG_SHEET_ID, rowIndex: 56 }, { sheetId: AUG_SHEET_ID, rowIndex: 71 }],
   );
 }
 
@@ -349,7 +398,10 @@ const RECORD: SyncableRecord = {
 /* ── Preflight ─────────────────────────────────────────────────────────────── */
 
 {
-  const { calls, fetchImpl } = mock(() => ({ body: { values: [['DATE'], [46256]] } }));
+  const HEADERS = ['DATE', 'AGENT NAME', 'VISA NUMBER', 'PASSPORT NUMBER', 'NAME', 'DEPARTURE DATE', 'ARRIVAL DATE'];
+  const { calls, fetchImpl } = mock(() => ({
+    body: { values: [HEADERS, [46256, 'Al Bushra', 'V-1', 'A-1', 'Someone', 46260, '04/09/2026']] },
+  }));
   const result = await preflightDateCells(clientWith(fetchImpl), 'AUG', 3);
 
   check('the preflight is a read', calls[0].method === 'GET');
@@ -357,8 +409,39 @@ const RECORD: SyncableRecord = {
   check('it renders values unformatted so text and dates are distinguishable', url.includes('valueRenderOption=UNFORMATTED_VALUE'));
   check('and dates as serial numbers', url.includes('dateTimeRenderOption=SERIAL_NUMBER'));
   check('it writes nothing', calls.every((call) => call.method === 'GET' && call.body === null));
+  check('it issues no append', calls.every((call) => !call.url.includes(':append')));
+  check('and no batchUpdate', calls.every((call) => !call.url.includes(':batchUpdate')));
   eq('it reports the range it sampled', result.range, 'AUG!A1:G4');
   eq('a real date comes back as a serial number', result.sample[1][0], 46256);
+
+  /* The sample is only useful once it is read: the report says, per column,
+     whether the register holds real dates or date-shaped text. */
+  const report = describeDateCells(result.sample);
+  eq('DATE is reported as real dates', report[0].verdict, 'date_values');
+  eq('DEPARTURE DATE too', report[1].verdict, 'date_values');
+  eq('and ARRIVAL DATE is caught as text', report[2].verdict, 'text');
+  eq('with the header the workbook actually has', report[2].actualHeader, 'ARRIVAL DATE');
+}
+
+{
+  /* The whole preflight surface — workbook read plus one values read — must be
+     GETs. Anything else here would make "read-only" a claim rather than a fact. */
+  const { calls, fetchImpl } = mock((url) => ({
+    body: url.includes('/values/')
+      ? { values: [['DATE'], [46256]] }
+      : { properties: { locale: 'en_GB', timeZone: 'Africa/Lagos' }, sheets: [{ properties: { title: 'AUG', sheetId: AUG_SHEET_ID } }] },
+  }));
+  const client = clientWith(fetchImpl);
+  await readWorkbook(client);
+  await preflightDateCells(client, 'AUG');
+
+  eq('the preflight makes exactly two Google calls', calls.length, 2);
+  check('both are reads', calls.every((call) => call.method === 'GET'));
+  check('neither carries a body', calls.every((call) => call.body === null));
+  check(
+    'and neither is a mutating endpoint',
+    calls.every((call) => !/:append|:batchUpdate/.test(call.url)),
+  );
 }
 
 /* ── Failures are narrowed, never forwarded ────────────────────────────────── */
@@ -373,7 +456,7 @@ const RECORD: SyncableRecord = {
     },
   };
   const { fetchImpl } = mock(() => ({ status: 403, body: leaky }));
-  const error = await rejects('a permission failure is refused', () => listTabs(clientWith(fetchImpl)));
+  const error = await rejects('a permission failure is refused', () => readWorkbook(clientWith(fetchImpl)));
 
   check('reported as unreachable', error instanceof SheetsError && error.code === 'register_unreachable');
   check("Google's message is not forwarded", error instanceof Error && !error.message.includes('PERMISSION_DENIED'));
@@ -387,19 +470,19 @@ const RECORD: SyncableRecord = {
 
 {
   const { fetchImpl } = mock(() => ({ status: 404, body: { error: { message: 'Requested entity was not found.' } } }));
-  const error = await rejects('a missing spreadsheet is refused', () => listTabs(clientWith(fetchImpl)));
+  const error = await rejects('a missing spreadsheet is refused', () => readWorkbook(clientWith(fetchImpl)));
   check('also reported as unreachable', error instanceof SheetsError && error.code === 'register_unreachable');
 }
 
 {
   const { fetchImpl } = mock(() => ({ status: 429, body: {} }));
-  const error = await rejects('a rate limit is refused', () => listTabs(clientWith(fetchImpl)));
+  const error = await rejects('a rate limit is refused', () => readWorkbook(clientWith(fetchImpl)));
   check('reported distinctly, because retrying later will work', error instanceof SheetsError && error.code === 'register_rate_limited');
 }
 
 {
   const { fetchImpl } = mock(() => ({ status: 500, body: {} }));
-  const error = await rejects('a Google server error is refused', () => listTabs(clientWith(fetchImpl)));
+  const error = await rejects('a Google server error is refused', () => readWorkbook(clientWith(fetchImpl)));
   check('reported as a generic register error', error instanceof SheetsError && error.code === 'register_error');
 }
 

@@ -15,11 +15,11 @@ import {
 /**
  * Confirmed visas the office spreadsheet does not yet show.
  *
- * Synchronisation is never back-filled: no deployment, migration or background
- * job writes historical records into the office register. Everything that has
- * not been sent — including every record confirmed before this feature existed
- * — waits here until a person sends it, which is also why the panel names the
- * reason rather than just the status.
+ * Newly confirmed records DO attempt synchronisation automatically. What is never
+ * back-filled is everything already in the register: no deployment, migration or
+ * background job sends a record confirmed before this feature existed. Those, and
+ * any record whose automatic attempt did not land, wait here until a person sends
+ * them — which is why the panel names the reason rather than just the status.
  *
  * Ordered oldest first, and hidden entirely when there is nothing outstanding.
  */
@@ -61,7 +61,7 @@ export function AwaitingSyncList({
   return (
     <Panel
       title="Awaiting office register"
-      description="Confirmed visas that have not been written to the office spreadsheet yet. Nothing is sent automatically — send each one when the register is ready for it."
+      description="Confirmed records that are not yet in the office register. Existing records are not backfilled automatically; use Sync now or Retry Sync when required."
       actions={
         <Button
           variant="ghost"

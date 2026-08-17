@@ -14,13 +14,17 @@
  */
 
 import {
-  DIRECT_CLIENT_LABEL,
+  DATE_SAMPLE_COLUMNS,
+  DIRECT_CLIENT_SHEET_LABEL,
   MONTH_TABS,
   OFFICE_REGISTER_COLUMNS,
   ROW_METADATA_KEY,
+  type MetadataRowLocation,
   type SyncableRecord,
   agentNameFor,
   buildRegisterRow,
+  classifyCell,
+  describeDateCells,
   findBusinessMatches,
   isProtectedTab,
   monthTabFor,
@@ -174,8 +178,10 @@ eq('the columns after the blanks are still in place', sparse[10], 'Al Muhandis V
 /* ── 19. Date input strategy ───────────────────────────────────────────────── */
 
 /* Dates go out as ISO `YYYY-MM-DD` and are sent with USER_ENTERED (asserted in
-   sheets.test.ts), so Sheets parses them into real date values regardless of the
-   workbook's locale — 08/09 is never ambiguous on the wire. */
+   sheets.test.ts), so Sheets stores real date values rather than text. ISO is the
+   form least likely to be misread — but USER_ENTERED parses by the same rules as
+   typing into the Sheets UI, so it follows the workbook's locale and is NOT
+   locale-independent. That is what the read-only preflight is for. */
 check('dates leave as ISO', /^\d{4}-\d{2}-\d{2}$/.test(row[0]));
 check('departure leaves as ISO', /^\d{4}-\d{2}-\d{2}$/.test(row[5]));
 eq(
@@ -192,15 +198,35 @@ eq(
 /* ── AGENT NAME ────────────────────────────────────────────────────────────── */
 
 eq('a sub-agent case carries the agent snapshot', agentNameFor(BASE), 'Al Bushra Travels');
+eq('a sub-agent snapshot reaches the register unchanged', buildRegisterRow(BASE)[1], 'Al Bushra Travels');
+
+/*
+ * The register is filtered and reported on by agent name, so a direct client must
+ * carry the office's own established spelling. Writing the HajjERP screen label
+ * "Inna Ataina (direct client)" into this column would split one responsibility
+ * group into two different agent names and silently break the office's totals.
+ */
+eq('the direct-client register label is the office convention', DIRECT_CLIENT_SHEET_LABEL, 'Inna-Ataina');
 eq(
   'a direct company client is labelled, not left blank',
   agentNameFor({ ...BASE, client_source: 'direct', agent_name_snapshot: '' }),
-  DIRECT_CLIENT_LABEL,
+  'Inna-Ataina',
 );
 eq(
   'a direct client is labelled even if a stale snapshot lingers',
   agentNameFor({ ...BASE, client_source: 'direct', agent_name_snapshot: 'Some Agent' }),
-  DIRECT_CLIENT_LABEL,
+  'Inna-Ataina',
+);
+eq(
+  'and it is the AGENT NAME cell that carries it',
+  buildRegisterRow({ ...BASE, client_source: 'direct', agent_name_snapshot: '' })[1],
+  'Inna-Ataina',
+);
+check(
+  'the HajjERP screen wording never reaches the register',
+  !buildRegisterRow({ ...BASE, client_source: 'direct', agent_name_snapshot: '' }).some((cell) =>
+    cell.includes('direct client'),
+  ),
 );
 
 /* ── Identifier normalisation ──────────────────────────────────────────────── */
@@ -256,6 +282,31 @@ eq(
 
 eq('the metadata key is the agreed one', ROW_METADATA_KEY, 'hajjerp_record_id');
 
+const AUG_SHEET = 812345;
+const SEPT_SHEET = 998877;
+
+/** A metadata hit on the tab currently being targeted. */
+const onTargetTab = (rowIndex: number): MetadataRowLocation => ({
+  sheetId: AUG_SHEET,
+  tabTitle: 'AUG',
+  rowIndex,
+});
+
+/** Resolve with AUG as the target unless a test says otherwise. */
+function decide(input: {
+  metadataRows?: MetadataRowLocation[];
+  businessMatchRowIndices?: number[];
+  targetSheetId?: number;
+  targetTabTitle?: string;
+}) {
+  return resolveRow({
+    targetSheetId: input.targetSheetId ?? AUG_SHEET,
+    targetTabTitle: input.targetTabTitle ?? 'AUG',
+    metadataRows: input.metadataRows ?? [],
+    businessMatchRowIndices: input.businessMatchRowIndices ?? [],
+  });
+}
+
 /*
  * 1. Row-number drift. Staff insert and delete rows in the register constantly.
  *    Developer metadata moves with its row, so the same record resolves to
@@ -264,12 +315,12 @@ eq('the metadata key is the agreed one', ROW_METADATA_KEY, 'hajjerp_record_id');
  */
 eq(
   'a tagged row is followed to wherever it now sits',
-  resolveRow({ metadataRowIndices: [56], businessMatchRowIndices: [] }),
+  decide({ metadataRows: [onTargetTab(56)] }),
   { action: 'update', rowIndex: 56, source: 'metadata' },
 );
 eq(
   'the same record after five rows were inserted above it',
-  resolveRow({ metadataRowIndices: [61], businessMatchRowIndices: [] }),
+  decide({ metadataRows: [onTargetTab(61)] }),
   { action: 'update', rowIndex: 61, source: 'metadata' },
 );
 
@@ -282,18 +333,14 @@ eq(
  */
 check(
   'the row decision has no input for a stored row reference',
-  resolveRow.length === 1 &&
-    (() => {
-      const decided = resolveRow({
-        metadataRowIndices: [12],
-        businessMatchRowIndices: [90],
-      });
-      return decided.action === 'update' && decided.rowIndex === 12;
-    })(),
+  (() => {
+    const decided = decide({ metadataRows: [onTargetTab(12)], businessMatchRowIndices: [90] });
+    return decided.action === 'update' && decided.rowIndex === 12;
+  })(),
 );
 eq(
   'metadata wins even when a different row also matches on identity',
-  resolveRow({ metadataRowIndices: [12], businessMatchRowIndices: [90] }),
+  decide({ metadataRows: [onTargetTab(12)], businessMatchRowIndices: [90] }),
   { action: 'update', rowIndex: 12, source: 'metadata' },
 );
 
@@ -305,7 +352,7 @@ eq(
  *    than stranding it.
  */
 const CORRECTED_VISA: SyncableRecord = { ...BASE, visa_number: 'V-8891099' };
-const ownedRow = resolveRow({ metadataRowIndices: [56], businessMatchRowIndices: [] });
+const ownedRow = decide({ metadataRows: [onTargetTab(56)] });
 eq(
   'a corrected visa number still updates the row this record owns',
   ownedRow,
@@ -324,14 +371,14 @@ check(
    all once metadata has answered. */
 eq(
   'a corrected visa number does not produce a conflict',
-  resolveRow({ metadataRowIndices: [56], businessMatchRowIndices: [] }).action,
+  decide({ metadataRows: [onTargetTab(56)] }).action,
   'update',
 );
 
 const CORRECTED_PASSPORT: SyncableRecord = { ...BASE, passport_number: 'A09999999' };
 eq(
   'a corrected passport number likewise updates the owned row',
-  resolveRow({ metadataRowIndices: [56], businessMatchRowIndices: [] }),
+  decide({ metadataRows: [onTargetTab(56)] }),
   { action: 'update', rowIndex: 56, source: 'metadata' },
 );
 eq(
@@ -345,47 +392,136 @@ eq(
    business-identity reconciliation first. */
 eq(
   'a record whose row was never tagged falls through to identity, not to a blind update',
-  resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [] }),
+  decide({}),
   { action: 'append' },
 );
+
+/* ── Cross-month ownership ──────────────────────────────────────────────────
+   The duplication this guards against is subtle and expensive: a record synced
+   to AUG whose departure is legitimately corrected to SEPT has NO business-identity
+   match in SEPT, so a metadata search scoped to the target tab would find nothing,
+   append, and leave the company holding two register rows for one visa. */
+
+const OWNED_IN_AUG: MetadataRowLocation = { sheetId: AUG_SHEET, tabTitle: 'AUG', rowIndex: 56 };
+
+const crossMonth = decide({
+  targetSheetId: SEPT_SHEET,
+  targetTabTitle: 'SEPT',
+  metadataRows: [OWNED_IN_AUG],
+  /* Nothing in SEPT matches on identity — precisely the case that used to append. */
+  businessMatchRowIndices: [],
+});
+eq('a corrected departure month refuses instead of writing', crossMonth.action, 'conflict');
+check(
+  'and it never appends, which is what would have created the duplicate',
+  crossMonth.action !== 'append',
+);
+check(
+  'the refusal names the tab the row is actually on',
+  crossMonth.action === 'conflict' && /AUG office-register row/.test(crossMonth.reason),
+);
+check(
+  'and the month the record now belongs to',
+  crossMonth.action === 'conflict' && /belongs to SEPT/.test(crossMonth.reason),
+);
+check(
+  'and asks for the month change to be resolved',
+  crossMonth.action === 'conflict' && /Resolve the month change before retrying/.test(crossMonth.reason),
+);
+check('a cross-month refusal carries no row to write to', !('rowIndex' in crossMonth));
+
+/* The row on the other tab is not overwritten either — a conflict names no row at
+   all, so neither tab is touched. */
+check(
+  'the owned row on the other tab is not offered as a write target',
+  !JSON.stringify(crossMonth).includes('"rowIndex"'),
+);
+
+/* Even when SEPT happens to contain an identity match, ownership still decides.
+   Adopting the SEPT row would leave the AUG row behind as a second live record. */
+const crossMonthWithMatch = decide({
+  targetSheetId: SEPT_SHEET,
+  targetTabTitle: 'SEPT',
+  metadataRows: [OWNED_IN_AUG],
+  businessMatchRowIndices: [12],
+});
+eq(
+  'an identity match on the new tab does not override cross-month ownership',
+  crossMonthWithMatch.action,
+  'conflict',
+);
+
+/* A tag whose tab could not be resolved still refuses — it just cannot name the
+   month. Guessing "probably this tab" is exactly what must not happen. */
+const crossMonthUnknownTab = decide({
+  targetSheetId: SEPT_SHEET,
+  targetTabTitle: 'SEPT',
+  metadataRows: [{ sheetId: 4242, tabTitle: null, rowIndex: 3 }],
+});
+eq('a tag on an unidentifiable tab still refuses', crossMonthUnknownTab.action, 'conflict');
+check(
+  'and says so without inventing a month',
+  crossMonthUnknownTab.action === 'conflict' &&
+    /on another tab/.test(crossMonthUnknownTab.reason) &&
+    !/\bAUG\b/.test(crossMonthUnknownTab.reason),
+);
+
+/* The same record, same tab, is the ordinary case and must stay an update. */
+eq(
+  'ownership on the target tab is still a plain update',
+  decide({ targetSheetId: AUG_SHEET, targetTabTitle: 'AUG', metadataRows: [OWNED_IN_AUG] }),
+  { action: 'update', rowIndex: 56, source: 'metadata' },
+);
+
+/* Two tags anywhere in the workbook: the register already disagrees with itself,
+   and it is checked before the tab comparison so a cross-tab duplicate cannot be
+   read as a month change. */
+const duplicateAcrossTabs = decide({
+  targetSheetId: AUG_SHEET,
+  targetTabTitle: 'AUG',
+  metadataRows: [OWNED_IN_AUG, { sheetId: SEPT_SHEET, tabTitle: 'SEPT', rowIndex: 4 }],
+});
+eq('two tags across two tabs refuse', duplicateAcrossTabs.action, 'conflict');
+check(
+  'reported as a duplicate tag, not as a month change',
+  duplicateAcrossTabs.action === 'conflict' &&
+    /More than one register row is tagged/.test(duplicateAcrossTabs.reason),
+);
+check('and no row is named', !('rowIndex' in duplicateAcrossTabs));
 
 /* ── 3, 4, 5. Append, adopt, refuse ────────────────────────────────────────── */
 
-eq(
-  '3. nothing found anywhere appends',
-  resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [] }),
-  { action: 'append' },
-);
+eq('3. nothing found anywhere appends', decide({}), { action: 'append' });
 eq(
   '4. exactly one business match adopts that row instead of appending',
-  resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [41] }),
+  decide({ businessMatchRowIndices: [41] }),
   { action: 'update', rowIndex: 41, source: 'business_identity' },
 );
 check(
   '4. an adopted row is flagged for tagging',
   (() => {
-    const decided = resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [41] });
+    const decided = decide({ businessMatchRowIndices: [41] });
     return decided.action === 'update' && decided.source === 'business_identity';
   })(),
 );
 check(
   '5. more than one business match refuses rather than guessing',
-  resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [41, 77] }).action === 'conflict',
+  decide({ businessMatchRowIndices: [41, 77] }).action === 'conflict',
 );
 check(
   '5. more than one tagged row also refuses',
-  resolveRow({ metadataRowIndices: [12, 13], businessMatchRowIndices: [] }).action === 'conflict',
+  decide({ metadataRows: [onTargetTab(12), onTargetTab(13)] }).action === 'conflict',
 );
 check(
   '5. a refusal explains what the office must do',
   (() => {
-    const decided = resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [41, 77] });
+    const decided = decide({ businessMatchRowIndices: [41, 77] });
     return decided.action === 'conflict' && /retry/i.test(decided.reason);
   })(),
 );
 check(
   '5. a refusal never carries a row to write to',
-  !('rowIndex' in resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [41, 77] })),
+  !('rowIndex' in decide({ businessMatchRowIndices: [41, 77] })),
 );
 
 /*
@@ -396,27 +532,31 @@ check(
  */
 eq(
   '6. a retry after an append that was tagged updates, it does not append again',
-  resolveRow({ metadataRowIndices: [57], businessMatchRowIndices: [57] }),
+  decide({ metadataRows: [onTargetTab(57)], businessMatchRowIndices: [57] }),
   { action: 'update', rowIndex: 57, source: 'metadata' },
 );
 eq(
   '6. a retry after an append that was NOT tagged adopts the row it left behind',
-  resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [57] }),
+  decide({ businessMatchRowIndices: [57] }),
   { action: 'update', rowIndex: 57, source: 'business_identity' },
 );
 check(
   '6. no resolution both appends and names a row',
-  (['append', 'update', 'conflict'] as const).every((action) => {
-    const cases = [
-      resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [] }),
-      resolveRow({ metadataRowIndices: [], businessMatchRowIndices: [57] }),
-      resolveRow({ metadataRowIndices: [57], businessMatchRowIndices: [] }),
-      resolveRow({ metadataRowIndices: [1, 2], businessMatchRowIndices: [] }),
-    ];
-    return cases
-      .filter((decided) => decided.action === action)
-      .every((decided) => (decided.action === 'append' ? !('rowIndex' in decided) : true));
-  }),
+  [
+    decide({}),
+    decide({ businessMatchRowIndices: [57] }),
+    decide({ metadataRows: [onTargetTab(57)] }),
+    decide({ metadataRows: [onTargetTab(1), onTargetTab(2)] }),
+    decide({ targetSheetId: SEPT_SHEET, targetTabTitle: 'SEPT', metadataRows: [OWNED_IN_AUG] }),
+  ].every((decided) => (decided.action === 'append' ? !('rowIndex' in decided) : true)),
+);
+check(
+  '6. no conflict of any kind names a row',
+  [
+    decide({ businessMatchRowIndices: [41, 77] }),
+    decide({ metadataRows: [onTargetTab(1), onTargetTab(2)] }),
+    decide({ targetSheetId: SEPT_SHEET, targetTabTitle: 'SEPT', metadataRows: [OWNED_IN_AUG] }),
+  ].every((decided) => decided.action === 'conflict' && !('rowIndex' in decided)),
 );
 
 /* ── A1 ranges ─────────────────────────────────────────────────────────────── */
@@ -432,6 +572,88 @@ eq('a single-cell range is read too', rowIndexFromRange('AUG!A57'), 56);
 eq('a quoted tab in the response is handled', rowIndexFromRange("'AUG 2026'!A12:L12"), 11);
 eq('a missing range reveals nothing', rowIndexFromRange(undefined), null);
 eq('an unparseable range reveals nothing', rowIndexFromRange('AUG!A:L'), null);
+
+/* ── Preflight classification ──────────────────────────────────────────────
+   Reading what the register already holds, so a person can look before the first
+   live write. `UNFORMATTED_VALUE` is what makes the answer knowable: a real date
+   returns a serial number, a date-shaped string returns a string. */
+
+eq('a serial number is a real date value', classifyCell(46256), 'date_value');
+eq('a date-shaped string is text', classifyCell('21/08/2026'), 'text');
+eq('an ISO string is still text, not a date value', classifyCell('2026-08-21'), 'text');
+eq('an empty cell is empty', classifyCell(''), 'empty');
+eq('a missing cell is empty', classifyCell(undefined), 'empty');
+eq('a null cell is empty', classifyCell(null), 'empty');
+eq('a boolean is neither', classifyCell(true), 'other');
+
+eq('the three date columns are the ones the register has', DATE_SAMPLE_COLUMNS.length, 3);
+eq(
+  'and they sit where the twelve-column mapping puts them',
+  DATE_SAMPLE_COLUMNS.map((c) => [c.column, c.header]),
+  [['A', 'DATE'], ['F', 'DEPARTURE DATE'], ['G', 'ARRIVAL DATE']],
+);
+eq(
+  'each names the column the register mapping writes',
+  DATE_SAMPLE_COLUMNS.map((c) => OFFICE_REGISTER_COLUMNS[c.index]),
+  ['DATE', 'DEPARTURE DATE', 'ARRIVAL DATE'],
+);
+
+const HEADER_ROW = ['DATE', 'AGENT NAME', 'VISA NUMBER', 'PASSPORT NUMBER', 'NAME', 'DEPARTURE DATE', 'ARRIVAL DATE'];
+
+const realDates = describeDateCells([
+  HEADER_ROW,
+  [46256, 'Al Bushra', 'V-1', 'A-1', 'Someone', 46260, 46275],
+  [46257, 'Al Bushra', 'V-2', 'A-2', 'Someone', 46261, 46276],
+]);
+eq('a register storing real dates is reported as such', realDates.map((r) => r.verdict), [
+  'date_values',
+  'date_values',
+  'date_values',
+]);
+eq('the report names each column', realDates.map((r) => r.column), ['A', 'F', 'G']);
+eq('and the header it actually found there', realDates[2].actualHeader, 'ARRIVAL DATE');
+
+/* The answer that matters. Text means new rows written as real dates would sort
+   and filter differently from every row above them — a decision about the
+   register, not something to resolve in code. */
+const textDates = describeDateCells([
+  HEADER_ROW,
+  ['17/08/2026', 'Al Bushra', 'V-1', 'A-1', 'Someone', '21/08/2026', '04/09/2026'],
+]);
+eq('a register storing date-shaped text is reported as text', textDates.map((r) => r.verdict), [
+  'text',
+  'text',
+  'text',
+]);
+
+const mixedDates = describeDateCells([
+  HEADER_ROW,
+  [46256, '', '', '', '', '21/08/2026', ''],
+]);
+eq('a column holding both is reported as mixed', mixedDates[0].verdict, 'date_values');
+eq('and the text one as text', mixedDates[1].verdict, 'text');
+eq('a column with nothing in it says so rather than guessing', mixedDates[2].verdict, 'no_data');
+
+eq('a sample with only headers reports no data', describeDateCells([HEADER_ROW]).map((r) => r.verdict), [
+  'no_data',
+  'no_data',
+  'no_data',
+]);
+eq('an empty sample does not throw', describeDateCells([]).length, 3);
+eq('and reports nothing found', describeDateCells([])[0].verdict, 'no_data');
+eq('a missing header is reported as absent, not invented', describeDateCells([[]])[0].actualHeader, null);
+
+/* A header the workbook spells differently is surfaced, because a mismatch means
+   the column mapping itself needs checking before anything is written. */
+eq(
+  'a differing header is reported verbatim',
+  describeDateCells([['DATE ISSUED', '', '', '', '', 'DEP DATE', 'ARR DATE']])[1].actualHeader,
+  'DEP DATE',
+);
+check(
+  'the header row is never classified as data',
+  describeDateCells([HEADER_ROW, [46256, '', '', '', '', 46260, 46275]])[0].kinds.length === 1,
+);
 
 /* ── 13, 14. A Google outcome can never reach the liability record ─────────── */
 

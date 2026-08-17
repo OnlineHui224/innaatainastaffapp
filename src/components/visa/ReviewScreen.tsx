@@ -40,6 +40,15 @@ interface ReviewScreenProps {
   /** Local preview URL for the uploaded document, when previewable. */
   documentPreviewUrl: string | null;
   documentName: string | null;
+  /**
+   * Attach a document for local comparison only.
+   *
+   * Offered when a case is picked up from the register: the visa bytes were
+   * never stored, so a second officer who wants the original beside the values
+   * re-selects it themselves. Nothing is uploaded, no extraction runs, and no
+   * record is written.
+   */
+  onAttachDocument?: (file: File | null) => void;
 }
 
 interface FieldSpec {
@@ -99,6 +108,7 @@ export function ReviewScreen({
   onFieldUnverify,
   documentPreviewUrl,
   documentName,
+  onAttachDocument,
 }: ReviewScreenProps) {
   const verifiedCount = countVerified(extraction);
   const total = REQUIRED_VERIFICATION_KEYS.length;
@@ -147,7 +157,11 @@ export function ReviewScreen({
 
           {/* Document preview beside the fields where desktop space permits */}
           <div className="p-5 xl:col-span-2">
-            <DocumentPreview url={documentPreviewUrl} name={documentName} />
+            <DocumentPreview
+              url={documentPreviewUrl}
+              name={documentName}
+              onAttach={onAttachDocument}
+            />
           </div>
         </div>
       </Panel>
@@ -421,8 +435,17 @@ function ExtractedFieldRow({
   );
 }
 
-function DocumentPreview({ url, name }: { url: string | null; name: string | null }) {
+function DocumentPreview({
+  url,
+  name,
+  onAttach,
+}: {
+  url: string | null;
+  name: string | null;
+  onAttach?: (file: File | null) => void;
+}) {
   const [failed, setFailed] = useState(false);
+  const attachId = 'review-attach-document';
 
   return (
     <div className="lg:sticky lg:top-6">
@@ -442,8 +465,30 @@ function DocumentPreview({ url, name }: { url: string | null; name: string | nul
           <FileText className="h-6 w-6 text-slate-500" aria-hidden="true" />
           <p className="text-sm font-medium text-slate-700">{name ?? 'No document preview'}</p>
           <p className="text-xs text-slate-500">
-            This document cannot be previewed inline. Open the original file to check each value against it.
+            {name
+              ? 'This document cannot be previewed inline. Open the original file to check each value against it.'
+              : 'The visa document is never stored. Attach it again if you want it beside the values while you check them.'}
           </p>
+          {onAttach && (
+            <>
+              <label
+                htmlFor={attachId}
+                className="mt-1 inline-flex min-h-[44px] cursor-pointer items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:min-h-0"
+              >
+                Attach visa for comparison
+              </label>
+              <input
+                id={attachId}
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png"
+                className="hidden"
+                onChange={(e) => onAttach(e.target.files?.[0] ?? null)}
+              />
+              <p className="text-2xs text-slate-500">
+                Stays on this device. Nothing is uploaded and no extraction runs.
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>

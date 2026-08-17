@@ -19,9 +19,11 @@ import {
 } from '@/lib/visaExtraction';
 import {
   VisaRecordError,
+  clearFieldReview,
   confirmRecordReview,
+  extractionFromRecord,
   linkPilgrim,
-  revertRecordToPending,
+  reviewField,
   unlinkPilgrim,
 } from '@/lib/visaContractRecords';
 import type { VisaContractRecord } from '@/types/visaContract';
@@ -43,6 +45,7 @@ import {
   type MatchCandidate,
   type MatchPhase,
 } from '@/components/visa/PilgrimMatchPanel';
+import { PendingReviewList } from '@/components/visa/PendingReviewList';
 import { ProcessingSummary } from '@/components/visa/ProcessingSummary';
 import { RecordStatusBar } from '@/components/visa/RecordStatusBar';
 import { ViewerReadOnly } from '@/components/visa/ViewerReadOnly';
@@ -72,7 +75,6 @@ import {
   TRANSPORT_PACKAGE_LABELS,
   TRANSPORT_PACKAGE_LEGS,
   unverifyField,
-  verifyField,
 } from '@/types/visa';
 import type { SubAgent } from '@/types';
 import { cn } from '@/lib/utils';
@@ -343,62 +345,119 @@ export default function VisaLoggerPage() {
    * extraction, which can never reach this path.
    */
   const handleFieldEdit = useCallback(
-    (key: ExtractedFieldKey, value: string) => {
-      let next: VisaExtractionResult | null = null;
-      setExtraction((prev) => {
-        next = { ...prev, [key]: editFieldValue(prev[key], value) };
-        return next;
-      });
+    async (key: ExtractedFieldKey, value: string) => {
+      /* Optimistic locally so the badge clears the instant the value changes,
+         then persisted — the database is what withdraws the review and returns
+         a confirmed record to Pending Review. */
+      setExtraction((prev) => ({ ...prev, [key]: editFieldValue(prev[key], value) }));
+      if (!record) return;
+      try {
+        const updated = await clearFieldReview(record.id, key, value);
+        setRecord(updated);
+        setExtraction(extractionFromRecord(updated));
+        await logAudit({
+          action:
+            record.record_status === 'REVIEWED_CONFIRMED'
+              ? 'visa_contract_review_reopened'
+              : 'visa_contract_field_review_withdrawn',
+          recordType: 'visa_contract_record',
+          recordId: updated.id,
+          recordLabel: updated.traveller_name || updated.passport_number || 'Visa case',
+          previousValue: {
+            field: key,
+            record_status: record.record_status,
+            previously_reviewed_by: extraction[key].verifiedByName,
+          },
+          newValue: { field: key, reviewed: false, record_status: updated.record_status },
+          performedBy: profile?.id ?? null,
+          performedByName: profile?.full_name ?? '',
+        });
+      } catch (e) {
+        setAlert({
+          tone: 'critical',
+          message:
+            e instanceof VisaRecordError
+              ? `The correction could not be saved: ${e.message}`
+              : 'The correction could not be saved. Check your connection and try again.',
+        });
+      }
+    },
+    [record, extraction, profile?.id, profile?.full_name],
+  );
 
-      if (record?.record_status === 'REVIEWED_CONFIRMED' && profile?.id && next) {
-        const edited = next;
-        void revertRecordToPending(record, edited, profile.id)
-          .then(async (updated) => {
-            setRecord(updated);
-            setAlert({
-              tone: 'warning',
-              message:
-                'This value changed, so the record has returned to Pending Review. Review all four values again to confirm it.',
-            });
-            await logAudit({
-              action: 'visa_contract_review_reopened',
-              recordType: 'visa_contract_record',
-              recordId: updated.id,
-              recordLabel: updated.traveller_name || updated.passport_number || 'Visa case',
-              previousValue: { record_status: 'REVIEWED_CONFIRMED' },
-              newValue: { record_status: 'PENDING_REVIEW', reopened_field: key },
-              performedBy: profile.id,
-              performedByName: profile.full_name ?? '',
-            });
-          })
-          .catch(() => {
-            setAlert({
-              tone: 'critical',
-              message: 'The record status could not be updated. Check your connection and try again.',
-            });
-          });
+  /**
+   * The only route to a reviewed field.
+   *
+   * The officer and the time are stamped by the database from the authenticated
+   * session — this call says only which field, and which value is being attested
+   * to. A browser cannot name a reviewer.
+   */
+  const handleFieldVerify = useCallback(
+    async (key: ExtractedFieldKey) => {
+      const value = (extraction[key].value ?? '').trim();
+      if (!value) return;
+      /* A review is a database fact. With no record there is nowhere to record
+         it, and a badge that turned green anyway would assert something untrue —
+         so the officer is told what has to happen first. */
+      if (!record) {
+        setAlert({
+          tone: 'critical',
+          message:
+            'This Visa case is not yet saved to HajjERP, so reviews cannot be recorded. Retry saving first — the values you have entered are kept.',
+        });
+        return;
+      }
+      try {
+        const updated = await reviewField(record.id, key, value);
+        setRecord(updated);
+        setExtraction(extractionFromRecord(updated));
+        await logAudit({
+          action: 'visa_contract_field_reviewed',
+          recordType: 'visa_contract_record',
+          recordId: updated.id,
+          recordLabel: updated.traveller_name || updated.passport_number || 'Visa case',
+          newValue: { field: key, reviewed: true },
+          performedBy: profile?.id ?? null,
+          performedByName: profile?.full_name ?? '',
+        });
+      } catch (e) {
+        setAlert({
+          tone: 'critical',
+          message:
+            e instanceof VisaRecordError
+              ? `The review could not be saved: ${e.message}`
+              : 'The review could not be saved. Check your connection and try again.',
+        });
+      }
+    },
+    [record, extraction, profile?.id, profile?.full_name],
+  );
+
+  /** Withdraws a review without changing the value. */
+  const handleFieldUnverify = useCallback(
+    async (key: ExtractedFieldKey) => {
+      setExtraction((prev) => ({ ...prev, [key]: unverifyField(prev[key]) }));
+      if (!record) return;
+      try {
+        const updated = await clearFieldReview(record.id, key);
+        setRecord(updated);
+        setExtraction(extractionFromRecord(updated));
+        await logAudit({
+          action: 'visa_contract_field_review_withdrawn',
+          recordType: 'visa_contract_record',
+          recordId: updated.id,
+          recordLabel: updated.traveller_name || updated.passport_number || 'Visa case',
+          previousValue: { field: key, reviewed: true },
+          newValue: { field: key, reviewed: false },
+          performedBy: profile?.id ?? null,
+          performedByName: profile?.full_name ?? '',
+        });
+      } catch {
+        setAlert({ tone: 'critical', message: 'The review could not be withdrawn. Try again.' });
       }
     },
     [record, profile?.id, profile?.full_name],
   );
-
-  /** The only route to a verified field. Officer and timestamp come from the session. */
-  const handleFieldVerify = useCallback(
-    (key: ExtractedFieldKey) => {
-      setExtraction((prev) => ({
-        ...prev,
-        [key]: verifyField(prev[key], {
-          id: profile?.id ?? null,
-          name: profile?.full_name ?? 'Staff member',
-        }),
-      }));
-    },
-    [profile?.id, profile?.full_name],
-  );
-
-  const handleFieldUnverify = useCallback((key: ExtractedFieldKey) => {
-    setExtraction((prev) => ({ ...prev, [key]: unverifyField(prev[key]) }));
-  }, []);
 
   const goToUpload = useCallback(() => {
     if (!caseDetailsValid) {
@@ -409,6 +468,58 @@ export default function VisaLoggerPage() {
     setStep('upload_visa');
     setAlert(null);
   }, [caseDetailsValid]);
+
+  /**
+   * Picks up a case a colleague already started.
+   *
+   * Everything is rebuilt from the record: the operational details, the identity
+   * values, and which fields are already reviewed with by whom and when. No
+   * second record is created — the case key comes from the record itself, so
+   * even an accidental extraction would be idempotent — and Gemini is not
+   * called, because the identity already exists.
+   *
+   * The source document is deliberately NOT restored: its bytes were never
+   * stored. An officer who wants it for comparison can attach it again, locally,
+   * from the review screen.
+   */
+  const continueReview = useCallback((existing: VisaContractRecord) => {
+    setRecord(existing);
+    setCaseKey(existing.client_case_key);
+    setPersistFailed(false);
+    setExtraction(extractionFromRecord(existing));
+    setManualEntry(existing.entry_source === 'MANUAL');
+    setFile(null);
+    setDetails({
+      ...emptyDetails(),
+      clientSource: existing.client_source,
+      agentId: existing.sub_agent_id,
+      agentName: existing.agent_name_snapshot,
+      assignedStaffId: existing.assigned_staff_id,
+      visaCompany: existing.visa_company ?? '',
+      makkahHotelId: existing.makkah_hotel_id,
+      makkahHotelName: existing.makkah_hotel_name ?? '',
+      madinahHotelId: existing.madinah_hotel_id,
+      madinahHotelName: existing.madinah_hotel_name ?? '',
+      transportPackage: (existing.transport_package as VisaCaseDetails['transportPackage']) ?? null,
+      plannedOutboundDate: existing.planned_departure_date ?? '',
+      expectedReturnDate: existing.expected_return_date ?? '',
+      arrivalPort: existing.arrival_port ?? '',
+      pilgrimId: existing.pilgrim_id,
+    });
+    setMatchPhase('idle');
+    setCandidates([]);
+    setMatchError(null);
+    setMatch({ status: 'no_match', pilgrim: null, conflicts: [], alternatives: [] });
+    setExtractionStatus('complete');
+    setCompletedSteps(new Set(['case_details', 'upload_visa']));
+    setStep('review_extraction');
+    setSavedAt('');
+    setAlert({
+      tone: 'info',
+      message:
+        'Continuing an open visa case. Reviews already recorded by other staff are shown against each value.',
+    });
+  }, []);
 
   const goToCaseDetails = useCallback(() => {
     setStep('case_details');
@@ -941,7 +1052,7 @@ export default function VisaLoggerPage() {
          The visa contract is NOT written into `pilgrims` any more. The register
          is its own system of record; controlled synchronisation of approved
          fields into the pilgrim operational record is a later milestone. */
-      const confirmed = await confirmRecordReview(record, extraction, profile.id);
+      const confirmed = await confirmRecordReview(record, profile.id);
       setRecord(confirmed);
 
       /* The verification trail travels with the audit entry too, so who reviewed
@@ -1121,6 +1232,8 @@ export default function VisaLoggerPage() {
           <div className="space-y-5 xl:col-span-2">
             {step === 'case_details' && (
               <>
+                {/* Continue an open case rather than starting a duplicate. */}
+                <PendingReviewList onContinue={continueReview} />
                 <CaseDetailsCard
                   details={details}
                   onChange={handleDetailsChange}
@@ -1272,7 +1385,12 @@ export default function VisaLoggerPage() {
                   onFieldVerify={handleFieldVerify}
                   onFieldUnverify={handleFieldUnverify}
                   documentPreviewUrl={filePreviewUrl}
-                  documentName={file?.name ?? null}
+                  documentName={file?.name ?? record?.source_filename ?? null}
+                  /* Local comparison only — no upload, no extraction, no write. */
+                  onAttachDocument={(attached) => {
+                    setFile(attached);
+                    setUploadError(null);
+                  }}
                 />
 
                 {/* Matching comes AFTER the identity has been reviewed, and uses

@@ -222,7 +222,8 @@ SELECT assert(NOT visa_contract_reviewers_valid(
                 "nationality":{"reviewed":true,"reviewed_by":"not-a-uuid","reviewed_at":"t"}}}'::jsonb),
   'a malformed reviewer identifier is refused, not raised as a cast error');
 
-SET ROLE authenticated;
+-- Run on the server path, where extraction_metadata is accepted rather than
+-- restored, so the reviewer-validity guard is genuinely what refuses these.
 SELECT assert(raises(format($$
   UPDATE visa_contract_records
   SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
@@ -239,7 +240,6 @@ SELECT assert(raises(format($$
   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a'
 $$, (SELECT full_review()::jsonb #- '{fields,visaNumber,reviewed_by}')::text)),
   'a field with no reviewer is refused');
-RESET ROLE;
 
 SELECT assert(
   (SELECT record_status FROM visa_contract_records
@@ -250,9 +250,13 @@ SELECT assert(
 \echo '=== C. CONFIRMATION SUCCEEDS — ONE OFFICER ==='
 
 SET ROLE authenticated;
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000a', 'passengerName',  'Zainab T. Muhammad');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000a', 'passportNumber', 'A01234567');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000a', 'visaNumber',     'V-55512');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000a', 'nationality',    'Nigerian');
 UPDATE visa_contract_records
-SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = full_review(),
-    updated_by = '11111111-2222-3333-4444-555555555555'
+SET record_status = 'REVIEWED_CONFIRMED', updated_by = '11111111-2222-3333-4444-555555555555'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000a';
 RESET ROLE;
 
@@ -289,11 +293,14 @@ VALUES ('aaaaaaaa-0000-4000-8000-00000000000c', 'sub_agent',
         'Zainab T. Muhammad', 'A01234567', 'V-55512', 'Nigerian');
 
 SET ROLE authenticated;
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000c', 'passengerName',  'Zainab T. Muhammad');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000c', 'passportNumber', 'A01234567');
+SET qa.actor = '22222222-3333-4444-5555-666666666666';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000c', 'visaNumber',  'V-55512');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000c', 'nationality', 'Nigerian');
 UPDATE visa_contract_records
-SET record_status = 'REVIEWED_CONFIRMED',
-    extraction_metadata = split_review('11111111-2222-3333-4444-555555555555',
-                                       '22222222-3333-4444-5555-666666666666'),
-    updated_by = '22222222-3333-4444-5555-666666666666'
+SET record_status = 'REVIEWED_CONFIRMED', updated_by = '22222222-3333-4444-5555-666666666666'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c';
 RESET ROLE;
 
@@ -314,9 +321,10 @@ SELECT assert(
   'the second officer remains recorded on theirs');
 SELECT assert(
   (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_at}'
-   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
-    = '2026-08-17T10:12:00Z',
-  'each field keeps its own review timestamp');
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c') IS NOT NULL
+  AND (SELECT extraction_metadata #>> '{fields,nationality,reviewed_at}'
+       FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c') IS NOT NULL,
+  'each field keeps its own server-stamped review timestamp');
 SELECT assert(
   (SELECT updated_by FROM visa_contract_records
    WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000c')
@@ -336,17 +344,180 @@ VALUES ('aaaaaaaa-0000-4000-8000-00000000000e', 'sub_agent',
         '7c9e6679-7425-40de-944b-e07fc1f90ae7', 'GEMINI', gen_random_uuid(),
         'Habib Yaru', 'B09876543', 'V-11111', 'Nigerian');
 SET ROLE authenticated;
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000e', 'passengerName',  'Habib Yaru');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000e', 'passportNumber', 'B09876543');
+SET qa.actor = '22222222-3333-4444-5555-666666666666';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000e', 'visaNumber',  'V-11111');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000e', 'nationality', 'Nigerian');
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
 UPDATE visa_contract_records
-SET record_status = 'REVIEWED_CONFIRMED',
-    extraction_metadata = split_review('11111111-2222-3333-4444-555555555555',
-                                       '22222222-3333-4444-5555-666666666666'),
-    updated_by = '11111111-2222-3333-4444-555555555555'
+SET record_status = 'REVIEWED_CONFIRMED', updated_by = '11111111-2222-3333-4444-555555555555'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000e';
 RESET ROLE;
 SELECT assert(
   (SELECT record_status FROM visa_contract_records
    WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000e') = 'REVIEWED_CONFIRMED',
   'either reviewing officer may perform the final confirmation');
+
+\echo ''
+\echo '=== E. FIELD REVIEWS PERSIST IMMEDIATELY, PER OFFICER ==='
+-- Musa reviews two fields; Ibrahim later opens the same record, sees Musa's
+-- work, reviews the other two and confirms. Nothing is held in a browser.
+
+INSERT INTO visa_contract_records (id, client_source, sub_agent_id, entry_source, client_case_key,
+  traveller_name, passport_number, visa_number, nationality)
+VALUES ('aaaaaaaa-0000-4000-8000-00000000000f', 'sub_agent',
+        '7c9e6679-7425-40de-944b-e07fc1f90ae7', 'GEMINI', gen_random_uuid(),
+        'Zainab T. Muhammad', 'A01234567', 'V-55512', 'Nigerian');
+
+-- 1 & 2. Musa reviews Name, then Passport. Each lands in the database at once.
+SET ROLE authenticated;
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'passengerName', 'Zainab T. Muhammad');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '11111111-2222-3333-4444-555555555555',
+  'reviewing Name persists Musa immediately');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by_name}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'QA Officer',
+  'the display name comes from the profile, not the caller');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_at}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') IS NOT NULL,
+  'a server timestamp is stamped');
+
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'passportNumber', 'A01234567');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passportNumber,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '11111111-2222-3333-4444-555555555555',
+  'reviewing Passport persists Musa immediately');
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'PENDING_REVIEW',
+  'two of four reviewed leaves the record PENDING_REVIEW');
+
+-- 7. Musa cannot claim Ibrahim reviewed a field, either through the function...
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'visaNumber', 'V-55512');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,visaNumber,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '11111111-2222-3333-4444-555555555555',
+  'the function stamps the caller, never a supplied identity');
+
+-- ...nor by PATCHing extraction_metadata directly through PostgREST.
+UPDATE visa_contract_records
+SET extraction_metadata = split_review('22222222-3333-4444-5555-666666666666',
+                                       '22222222-3333-4444-5555-666666666666'),
+    updated_by = '11111111-2222-3333-4444-555555555555'
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f';
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '11111111-2222-3333-4444-555555555555',
+  'a direct metadata PATCH cannot forge another employee as reviewer');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,nationality,reviewed}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') IS DISTINCT FROM 'true',
+  'a direct metadata PATCH cannot manufacture a review that never happened');
+
+-- Nor can it confirm on forged evidence sent in the same statement.
+SELECT assert(raises(format($$
+  UPDATE visa_contract_records
+  SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = %L,
+      updated_by = '11111111-2222-3333-4444-555555555555'
+  WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f'
+$$, full_review()::text)),
+  'confirmation uses stored evidence, not evidence sent alongside the status');
+
+-- 3 & 4. Ibrahim opens the same record and reviews the remaining field.
+SET qa.actor = '22222222-3333-4444-5555-666666666666';
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by_name}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'QA Officer',
+  'the second officer sees the first officer''s reviews');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'nationality', 'Nigerian');
+
+-- 5. Musa's attribution is untouched by Ibrahim's work.
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '11111111-2222-3333-4444-555555555555',
+  'the first officer''s attribution survives the second officer''s reviews');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,nationality,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '22222222-3333-4444-5555-666666666666',
+  'the second officer is recorded on the field they reviewed');
+
+-- 6. Ibrahim confirms, using only what the database already holds.
+UPDATE visa_contract_records
+SET record_status = 'REVIEWED_CONFIRMED', updated_by = '22222222-3333-4444-5555-666666666666'
+WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f';
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'REVIEWED_CONFIRMED',
+  'confirmation succeeds on stored evidence alone, with no metadata sent');
+SELECT assert(
+  (SELECT updated_by FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f')
+    = '22222222-3333-4444-5555-666666666666',
+  'the confirming officer is recorded separately from the field reviewers');
+
+-- 8 & 9. A correction withdraws that field's review; re-review names whoever
+-- actually performed it.
+SELECT visa_contract_clear_field_review('aaaaaaaa-0000-4000-8000-00000000000f', 'passengerName', 'Zainab Tukur Muhammad');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'false',
+  'editing a reviewed field withdraws that review');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') IS NULL,
+  'the withdrawn review no longer names a reviewer');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,previous_review,reviewed_by_name}'
+   FROM visa_contract_records WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'QA Officer',
+  'who previously reviewed it is preserved for the record');
+SELECT assert(
+  (SELECT traveller_name FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'Zainab Tukur Muhammad',
+  'the corrected value is persisted');
+SELECT assert(
+  (SELECT record_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'PENDING_REVIEW',
+  'a correction returns a confirmed record to PENDING_REVIEW');
+
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'passengerName', 'Zainab Tukur Muhammad');
+SELECT assert(
+  (SELECT extraction_metadata #>> '{fields,passengerName,reviewed_by}' FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = '22222222-3333-4444-5555-666666666666',
+  're-review is attributed to the officer who actually performed it');
+
+-- Guard rails on the stamping functions themselves.
+SELECT assert(raises($$
+  SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'record_status', 'x')
+$$), 'only identity fields can be reviewed');
+SELECT assert(raises($$
+  SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'nationality', '   ')
+$$), 'a blank value cannot be reviewed');
+
+SET qa.actor = '';
+SELECT assert(raises($$
+  SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000f', 'nationality', 'Nigerian')
+$$), 'an unauthenticated caller cannot review anything');
+RESET ROLE;
+
+-- 12. Pilgrim linking still works and stays optional.
+SELECT assert(
+  (SELECT pilgrim_match_status FROM visa_contract_records
+   WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000f') = 'PENDING_PILGRIM_MATCH',
+  'the multi-officer record confirmed without a pilgrim and stays optional');
+
+-- 14. No document bytes anywhere in the register.
+SELECT assert(
+  (SELECT count(*) FROM information_schema.columns
+   WHERE table_name = 'visa_contract_records'
+     AND (data_type IN ('bytea') OR column_name ILIKE '%base64%'
+          OR column_name ILIKE '%document_data%' OR column_name ILIKE '%file_data%')) = 0,
+  'the register has no column capable of holding document bytes');
 
 \echo ''
 \echo '=== D. SPREADSHEET PROVENANCE CANNOT BE FORGED ==='
@@ -389,9 +560,13 @@ UPDATE visa_contract_records
 SET traveller_name = 'Zainab T. Muhammad', passport_number = 'A01234567',
     visa_number = 'V-55512', nationality = 'Nigerian'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000d';
+SET qa.actor = '11111111-2222-3333-4444-555555555555';
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000d', 'passengerName',  'Zainab T. Muhammad');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000d', 'passportNumber', 'A01234567');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000d', 'visaNumber',     'V-55512');
+SELECT visa_contract_review_field('aaaaaaaa-0000-4000-8000-00000000000d', 'nationality',    'Nigerian');
 UPDATE visa_contract_records
-SET record_status = 'REVIEWED_CONFIRMED', extraction_metadata = full_review(),
-    updated_by = '11111111-2222-3333-4444-555555555555'
+SET record_status = 'REVIEWED_CONFIRMED', updated_by = '11111111-2222-3333-4444-555555555555'
 WHERE id = 'aaaaaaaa-0000-4000-8000-00000000000d';
 RESET ROLE;
 

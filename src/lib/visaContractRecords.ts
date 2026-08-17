@@ -18,13 +18,61 @@ import type { VisaContractRecord } from '@/types/visaContract';
  * UPDATE so the liability trail cannot be rewritten from the client.
  */
 
-/** The four identity columns, in the order the register reports them. */
-const IDENTITY_COLUMN: Record<ExtractedFieldKey, string> = {
-  passengerName: 'traveller_name',
-  passportNumber: 'passport_number',
-  visaNumber: 'visa_number',
-  nationality: 'nationality',
-};
+/** One field's stored review trail, as the database keeps it. */
+interface StoredFieldTrail {
+  ai_value?: string | null;
+  ai_confidence?: 'high' | 'medium' | 'low' | null;
+  final_value?: string | null;
+  edited?: boolean;
+  reviewed?: boolean;
+  reviewed_by?: string | null;
+  reviewed_by_name?: string | null;
+  reviewed_at?: string | null;
+}
+
+function storedFields(record: VisaContractRecord): Record<string, StoredFieldTrail> {
+  const metadata = record.extraction_metadata ?? {};
+  const fields = (metadata as { fields?: unknown }).fields;
+  return fields && typeof fields === 'object'
+    ? (fields as Record<string, StoredFieldTrail>)
+    : {};
+}
+
+/**
+ * Rebuilds the working case from what the database holds.
+ *
+ * This is what makes a handover real: the second officer sees which fields are
+ * already reviewed, by whom and when, because that state lives in the record
+ * rather than in whoever's browser happened to do the reviewing.
+ */
+export function extractionFromRecord(record: VisaContractRecord): VisaExtractionResult {
+  const fields = storedFields(record);
+  const column: Record<ExtractedFieldKey, string | null> = {
+    passengerName: record.traveller_name,
+    passportNumber: record.passport_number,
+    visaNumber: record.visa_number,
+    nationality: record.nationality,
+  };
+
+  const rebuilt = {} as VisaExtractionResult;
+  for (const key of EXTRACTED_FIELD_KEYS) {
+    const trail = fields[key] ?? {};
+    rebuilt[key] = {
+      value: column[key],
+      confidence: trail.ai_confidence ?? null,
+      sourcePage: null,
+      needsReview: !trail.reviewed,
+      verified: trail.reviewed === true,
+      verifiedAt: trail.reviewed_at ?? null,
+      verifiedById: trail.reviewed_by ?? null,
+      verifiedByName: trail.reviewed_by_name ?? null,
+      edited: trail.edited === true,
+      originalValue: trail.ai_value ?? null,
+    };
+  }
+  rebuilt.extractedAt = record.extracted_at ?? record.created_at;
+  return rebuilt;
+}
 
 export const RECORD_COLUMNS =
   'id, record_date, traveller_name, passport_number, visa_number, nationality, ' +
@@ -42,42 +90,6 @@ export class VisaRecordError extends Error {
     super(message);
     this.name = 'VisaRecordError';
   }
-}
-
-/**
- * Rebuilds the per-field trail.
- *
- * The extractor's original value and confidence are preserved beside the final
- * value, so a correction never erases what the machine actually claimed — which
- * is the only way to tell later whether a wrong record was a bad read or a bad
- * keystroke.
- */
-function buildFieldTrail(
-  extraction: VisaExtractionResult,
-  existing: Record<string, unknown>,
-): Record<string, unknown> {
-  const previous = (existing?.fields ?? {}) as Record<string, Record<string, unknown>>;
-
-  return Object.fromEntries(
-    EXTRACTED_FIELD_KEYS.map((key) => {
-      const field = extraction[key];
-      const prior = previous[key] ?? {};
-      return [
-        key,
-        {
-          /* Kept from the original insert. An edit must not overwrite it. */
-          ai_value: prior.ai_value ?? null,
-          ai_confidence: prior.ai_confidence ?? null,
-          final_value: field.value,
-          edited: field.edited,
-          reviewed: field.verified,
-          reviewed_by: field.verifiedById,
-          reviewed_by_name: field.verifiedByName,
-          reviewed_at: field.verifiedAt,
-        },
-      ];
-    }),
-  );
 }
 
 async function applyUpdate(
@@ -110,59 +122,73 @@ export async function fetchRecord(recordId: string): Promise<VisaContractRecord 
   return (data as unknown as VisaContractRecord) ?? null;
 }
 
-/**
- * Writes the reviewed identity to the canonical record and confirms it.
- *
- * This UPDATEs the record created at extraction. It never inserts: there is one
- * liability record per visa case, and a second would double-count the company's
- * exposure.
- */
-export async function confirmRecordReview(
-  record: VisaContractRecord,
-  extraction: VisaExtractionResult,
-  actorId: string,
-): Promise<VisaContractRecord> {
-  const identity = Object.fromEntries(
-    EXTRACTED_FIELD_KEYS.map((key) => [IDENTITY_COLUMN[key], extraction[key].value]),
-  );
-
-  return applyUpdate(
-    record.id,
-    {
-      ...identity,
-      record_status: 'REVIEWED_CONFIRMED',
-      extraction_metadata: {
-        ...record.extraction_metadata,
-        fields: buildFieldTrail(extraction, record.extraction_metadata),
-      },
-    },
-    actorId,
-  );
+/** Unwraps an RPC result into a record, or throws something readable. */
+function rpcResult(data: unknown, error: { message: string } | null): VisaContractRecord {
+  if (error) throw new VisaRecordError(error.message);
+  const record = Array.isArray(data) ? data[0] : data;
+  if (!record) {
+    throw new VisaRecordError('The visa record could not be found. Reload the page.');
+  }
+  return record as VisaContractRecord;
 }
 
 /**
- * Returns a confirmed record to pending after a staff edit.
+ * Records that this officer has reviewed one identity field — immediately.
  *
- * A confirmed record whose passport number has just been changed is not
- * confirmed any more. This runs only on a deliberate staff edit — never on a
- * retried extraction, which is refused upstream by the idempotency key.
+ * The review lands in the database now, not at final confirmation, so a case
+ * half-checked before a handover is not lost with the browser tab.
+ *
+ * Note what is NOT sent: no reviewer, no name, no timestamp. The database
+ * function stamps all three from the authenticated session, which is what makes
+ * "reviewed by Musa" a fact rather than a claim the browser made.
  */
-export async function revertRecordToPending(
+export async function reviewField(
+  recordId: string,
+  field: ExtractedFieldKey,
+  value: string,
+): Promise<VisaContractRecord> {
+  const { data, error } = await supabase.rpc('visa_contract_review_field', {
+    p_record_id: recordId,
+    p_field: field,
+    p_value: value,
+  });
+  return rpcResult(data, error);
+}
+
+/**
+ * Records a correction, or withdraws a review.
+ *
+ * Pass `value` to save a corrected value; omit it to retract an attestation
+ * without changing anything. Either way that field's review is cleared — the
+ * previous reviewer is not left standing over a value they never saw — and a
+ * confirmed record returns to Pending Review.
+ */
+export async function clearFieldReview(
+  recordId: string,
+  field: ExtractedFieldKey,
+  value?: string,
+): Promise<VisaContractRecord> {
+  const { data, error } = await supabase.rpc('visa_contract_clear_field_review', {
+    p_record_id: recordId,
+    p_field: field,
+    p_value: value ?? null,
+  });
+  return rpcResult(data, error);
+}
+
+/**
+ * Confirms the record from the evidence the database already holds.
+ *
+ * Deliberately sends nothing but the status and the confirming officer. The
+ * per-field reviewers are not rebuilt from browser state — doing so would let
+ * one officer's session overwrite a colleague's attribution — and the database
+ * refuses the transition unless all four fields are genuinely reviewed.
+ */
+export async function confirmRecordReview(
   record: VisaContractRecord,
-  extraction: VisaExtractionResult,
   actorId: string,
 ): Promise<VisaContractRecord> {
-  return applyUpdate(
-    record.id,
-    {
-      record_status: 'PENDING_REVIEW',
-      extraction_metadata: {
-        ...record.extraction_metadata,
-        fields: buildFieldTrail(extraction, record.extraction_metadata),
-      },
-    },
-    actorId,
-  );
+  return applyUpdate(record.id, { record_status: 'REVIEWED_CONFIRMED' }, actorId);
 }
 
 /**
@@ -195,4 +221,22 @@ export async function unlinkPilgrim(
     { pilgrim_id: null, pilgrim_match_status: 'PENDING_PILGRIM_MATCH' },
     actorId,
   );
+}
+
+/**
+ * Visa cases still awaiting review.
+ *
+ * The handover list. Deliberately small and ordered newest-first: it exists so
+ * an officer can pick up a colleague's part-finished case, not to be a second
+ * dashboard.
+ */
+export async function fetchPendingReviewRecords(limit = 15): Promise<VisaContractRecord[]> {
+  const { data, error } = await supabase
+    .from('visa_contract_records')
+    .select(RECORD_COLUMNS)
+    .eq('record_status', 'PENDING_REVIEW')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new VisaRecordError(error.message);
+  return (data as unknown as VisaContractRecord[]) ?? [];
 }

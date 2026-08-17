@@ -60,7 +60,12 @@ PSQL=(psql -h "$SOCKET_DIR" -p "$PORT" -U postgres -v ON_ERROR_STOP=1 -q)
 # these tests touch — this is a guard harness, not a schema replica.
 "${PSQL[@]}" <<'SQL' >/dev/null
 CREATE SCHEMA IF NOT EXISTS auth;
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;
+-- Supabase resolves auth.uid() from the request JWT. The tests need to switch
+-- officers, so it reads a settable GUC instead; `SET qa.actor` is this harness's
+-- stand-in for "signed in as".
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
+  SELECT NULLIF(current_setting('qa.actor', true), '')::uuid
+$$;
 
 CREATE TABLE profiles (
   id uuid PRIMARY KEY,
@@ -97,6 +102,7 @@ echo "Applying migration 019…"
 # RLS is owner-exempt, and these tests assert trigger behaviour rather than
 # policies, so they run as the table owner with RLS forced off for clarity.
 "${PSQL[@]}" -c "GRANT ALL ON visa_contract_records, sub_agents, pilgrims, profiles TO authenticated;" >/dev/null
+"${PSQL[@]}" -c "GRANT USAGE ON SCHEMA auth TO authenticated; GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated;" >/dev/null
 "${PSQL[@]}" -c "ALTER TABLE visa_contract_records DISABLE ROW LEVEL SECURITY;" >/dev/null
 
 echo "Running guard tests…"

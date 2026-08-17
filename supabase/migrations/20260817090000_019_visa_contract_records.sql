@@ -327,6 +327,24 @@ BEGIN
   NEW.record_date     := OLD.record_date;
   NEW.updated_at      := now();
 
+  /* Restore client-controlled columns FIRST, so the confirmation checks below
+     run against what is actually stored. Validating before restoring would let
+     a browser send forged evidence alongside the status: the check would pass,
+     the evidence would then be reverted, and the record would be left confirmed
+     on evidence that does not exist. */
+  IF NOT is_server THEN
+    /* Review evidence is written ONLY by the stamping functions further down,
+       which run as SECURITY DEFINER and take the reviewer from auth.uid(). */
+    NEW.extraction_metadata := OLD.extraction_metadata;
+
+    NEW.spreadsheet_sync_status := OLD.spreadsheet_sync_status;
+    NEW.spreadsheet_id          := OLD.spreadsheet_id;
+    NEW.spreadsheet_tab         := OLD.spreadsheet_tab;
+    NEW.spreadsheet_row_ref     := OLD.spreadsheet_row_ref;
+    NEW.last_synced_at          := OLD.last_synced_at;
+    NEW.sync_error              := OLD.sync_error;
+  END IF;
+
   IF NEW.record_status = 'REVIEWED_CONFIRMED' THEN
     IF NOT visa_contract_identity_complete(
          NEW.traveller_name, NEW.passport_number, NEW.visa_number, NEW.nationality) THEN
@@ -352,15 +370,6 @@ BEGIN
         'visa_contract_records: every field review must name a genuine staff member'
         USING ERRCODE = 'check_violation';
     END IF;
-  END IF;
-
-  IF NOT is_server THEN
-    NEW.spreadsheet_sync_status := OLD.spreadsheet_sync_status;
-    NEW.spreadsheet_id          := OLD.spreadsheet_id;
-    NEW.spreadsheet_tab         := OLD.spreadsheet_tab;
-    NEW.spreadsheet_row_ref     := OLD.spreadsheet_row_ref;
-    NEW.last_synced_at          := OLD.last_synced_at;
-    NEW.sync_error              := OLD.sync_error;
   END IF;
 
   RETURN NEW;
@@ -402,7 +411,195 @@ CREATE TRIGGER visa_contract_records_insert_guard_trg
   FOR EACH ROW EXECUTE FUNCTION visa_contract_records_insert_guard();
 
 -- ============================================================
--- 5. Row level security
+-- 5. Field review — the only way evidence is written
+-- ============================================================
+-- A review is a claim that a named person checked a value against a document.
+-- The browser is therefore allowed to say WHICH field and WHAT value; it is
+-- never allowed to say WHO reviewed it or WHEN. Both are stamped here from
+-- `auth.uid()` and `now()`, and the update guard above restores
+-- `extraction_metadata` for every other write path, so this is the only route.
+--
+-- Reviews persist the moment they happen, not at final confirmation. A handover
+-- part-way through a case is normal, and a colleague must be able to pick it up
+-- and see exactly what has already been checked, by whom.
+
+/** The four keys a review may name. Anything else is rejected. */
+CREATE OR REPLACE FUNCTION visa_contract_is_identity_field(field text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT field IN ('passengerName', 'passportNumber', 'visaNumber', 'nationality');
+$$;
+
+/** The identity column a field key writes to. */
+CREATE OR REPLACE FUNCTION visa_contract_identity_column(field text)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE field
+    WHEN 'passengerName'  THEN 'traveller_name'
+    WHEN 'passportNumber' THEN 'passport_number'
+    WHEN 'visaNumber'     THEN 'visa_number'
+    WHEN 'nationality'    THEN 'nationality'
+  END;
+$$;
+
+/**
+ * Records that the signed-in officer has reviewed one identity field.
+ *
+ * `p_value` is the value they are attesting to, so the value and the attestation
+ * cannot drift apart. The reviewer, their display name and the time all come
+ * from the server.
+ */
+CREATE OR REPLACE FUNCTION visa_contract_review_field(
+  p_record_id uuid,
+  p_field text,
+  p_value text
+)
+RETURNS visa_contract_records
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  actor       uuid := auth.uid();
+  actor_name  text;
+  updated     visa_contract_records;
+BEGIN
+  IF actor IS NULL OR NOT can_edit_operational_records() THEN
+    RAISE EXCEPTION 'visa_contract_records: not authorised to review this record'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NOT visa_contract_is_identity_field(p_field) THEN
+    RAISE EXCEPTION 'visa_contract_records: % is not a reviewable identity field', p_field
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF COALESCE(btrim(p_value), '') = '' THEN
+    RAISE EXCEPTION 'visa_contract_records: a blank value cannot be reviewed'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT full_name INTO actor_name FROM profiles WHERE id = actor;
+
+  EXECUTE format(
+    'UPDATE visa_contract_records
+        SET %I = $1,
+            extraction_metadata = jsonb_set(
+              -- `fields` must already exist: jsonb_set creates only the LAST
+              -- level of a path, so setting fields->key on a metadata object
+              -- with no `fields` would silently return it unchanged.
+              COALESCE(extraction_metadata, ''{}''::jsonb)
+                || jsonb_build_object(''fields'',
+                     COALESCE(extraction_metadata -> ''fields'', ''{}''::jsonb)),
+              ARRAY[''fields'', $2],
+              COALESCE(extraction_metadata #> ARRAY[''fields'', $2], ''{}''::jsonb)
+                || jsonb_build_object(
+                     ''final_value'', $1,
+                     ''reviewed'', true,
+                     ''reviewed_by'', $3::text,
+                     ''reviewed_by_name'', $4,
+                     ''reviewed_at'', $5
+                   ),
+              true
+            ),
+            updated_by = $3
+      WHERE id = $6
+      RETURNING *',
+    visa_contract_identity_column(p_field))
+  INTO updated
+  USING btrim(p_value), p_field, actor, COALESCE(actor_name, ''),
+        to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), p_record_id;
+
+  IF updated.id IS NULL THEN
+    RAISE EXCEPTION 'visa_contract_records: record not found'
+      USING ERRCODE = 'no_data_found';
+  END IF;
+  RETURN updated;
+END;
+$$;
+
+/**
+ * Records a correction, and withdraws that field's review.
+ *
+ * Changing a value is not reviewing it. The previous reviewer and time are
+ * cleared rather than left standing over a value they never saw — and
+ * `previous_review` keeps who it was, so the correction is legible afterwards.
+ * A confirmed record returns to PENDING_REVIEW, because it is no longer true
+ * that every value on it has been checked.
+ *
+ * `p_value` NULL means "withdraw the review, keep the value" — an officer
+ * retracting an attestation without changing anything.
+ */
+CREATE OR REPLACE FUNCTION visa_contract_clear_field_review(
+  p_record_id uuid,
+  p_field text,
+  p_value text DEFAULT NULL
+)
+RETURNS visa_contract_records
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  actor   uuid := auth.uid();
+  updated visa_contract_records;
+BEGIN
+  IF actor IS NULL OR NOT can_edit_operational_records() THEN
+    RAISE EXCEPTION 'visa_contract_records: not authorised to edit this record'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NOT visa_contract_is_identity_field(p_field) THEN
+    RAISE EXCEPTION 'visa_contract_records: % is not a reviewable identity field', p_field
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  EXECUTE format(
+    'UPDATE visa_contract_records
+        SET %I = COALESCE($1, %I),
+            record_status = ''PENDING_REVIEW'',
+            extraction_metadata = jsonb_set(
+              -- `fields` must already exist: jsonb_set creates only the LAST
+              -- level of a path, so setting fields->key on a metadata object
+              -- with no `fields` would silently return it unchanged.
+              COALESCE(extraction_metadata, ''{}''::jsonb)
+                || jsonb_build_object(''fields'',
+                     COALESCE(extraction_metadata -> ''fields'', ''{}''::jsonb)),
+              ARRAY[''fields'', $2],
+              COALESCE(extraction_metadata #> ARRAY[''fields'', $2], ''{}''::jsonb)
+                || jsonb_build_object(
+                     ''final_value'', COALESCE($1, %I),
+                     ''edited'', ($1 IS NOT NULL),
+                     ''reviewed'', false,
+                     ''reviewed_by'', NULL,
+                     ''reviewed_by_name'', NULL,
+                     ''reviewed_at'', NULL,
+                     ''previous_review'', jsonb_build_object(
+                       ''reviewed_by'', extraction_metadata #>> ARRAY[''fields'', $2, ''reviewed_by''],
+                       ''reviewed_by_name'', extraction_metadata #>> ARRAY[''fields'', $2, ''reviewed_by_name''],
+                       ''reviewed_at'', extraction_metadata #>> ARRAY[''fields'', $2, ''reviewed_at''],
+                       ''withdrawn_by'', $3::text
+                     )
+                   ),
+              true
+            ),
+            updated_by = $3
+      WHERE id = $4
+      RETURNING *',
+    visa_contract_identity_column(p_field),
+    visa_contract_identity_column(p_field),
+    visa_contract_identity_column(p_field))
+  INTO updated
+  USING NULLIF(btrim(COALESCE(p_value, '')), ''), p_field, actor, p_record_id;
+
+  IF updated.id IS NULL THEN
+    RAISE EXCEPTION 'visa_contract_records: record not found'
+      USING ERRCODE = 'no_data_found';
+  END IF;
+  RETURN updated;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION visa_contract_review_field(uuid, text, text) FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION visa_contract_review_field(uuid, text, text) TO authenticated;
+REVOKE EXECUTE ON FUNCTION visa_contract_clear_field_review(uuid, text, text) FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION visa_contract_clear_field_review(uuid, text, text) TO authenticated;
+
+-- ============================================================
+-- 6. Row level security
 -- ============================================================
 
 ALTER TABLE visa_contract_records ENABLE ROW LEVEL SECURITY;

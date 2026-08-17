@@ -22,10 +22,12 @@ import {
   clearFieldReview,
   confirmRecordReview,
   extractionFromRecord,
+  fetchRecord,
   linkPilgrim,
   reviewField,
   unlinkPilgrim,
 } from '@/lib/visaContractRecords';
+import { SheetSyncError, syncRecordToOfficeRegister } from '@/lib/visaSheetSync';
 import type { VisaContractRecord } from '@/types/visaContract';
 import { logAudit } from '@/lib/audit';
 import { formatDateTime } from '@/lib/priority';
@@ -46,6 +48,7 @@ import {
   type MatchPhase,
 } from '@/components/visa/PilgrimMatchPanel';
 import { PendingReviewList } from '@/components/visa/PendingReviewList';
+import { AwaitingSyncList } from '@/components/visa/AwaitingSyncList';
 import { ProcessingSummary } from '@/components/visa/ProcessingSummary';
 import { RecordStatusBar } from '@/components/visa/RecordStatusBar';
 import { ViewerReadOnly } from '@/components/visa/ViewerReadOnly';
@@ -199,6 +202,16 @@ export default function VisaLoggerPage() {
   /** Set when extraction succeeded but the database write did not. */
   const [persistFailed, setPersistFailed] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  /**
+   * The record currently being written to the office register, if any.
+   *
+   * Held as an id rather than a flag because the sync action exists in two
+   * places — the case on screen, and the list of confirmed records the office
+   * copy is missing — and only the one being written should show as busy.
+   */
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  /** Bumped after a sync so the awaiting-sync list re-reads from the database. */
+  const [syncListVersion, setSyncListVersion] = useState(0);
 
   const [alert, setAlert] = useState<{ tone: 'info' | 'warning' | 'critical' | 'success'; message: string } | null>(
     null,
@@ -913,6 +926,97 @@ export default function VisaLoggerPage() {
 
   const backToReview = useCallback(() => setStep('review_extraction'), []);
 
+  // ── Office register ────────────────────────────────────────────────
+  /**
+   * Writes a confirmed record to the company's Google Sheet.
+   *
+   * The browser sends the record id and nothing else. Which month tab, which
+   * row, and whether the outcome counts as synced are all decided on the server
+   * — so this function cannot report a success that did not happen, and the
+   * refreshed record it reads back is the database's account, not its own.
+   *
+   * Safe to call repeatedly: the server resolves which register row already
+   * belongs to this record before writing, so a retry updates that row instead
+   * of adding a second one.
+   *
+   * Nothing here can affect the HajjERP record. A failure leaves it confirmed,
+   * leaves the pilgrim match alone, and is reported as what it is — the office
+   * copy being out of date.
+   */
+  const runOfficeRegisterSync = useCallback(
+    async (recordId: string, trigger: 'automatic' | 'manual') => {
+      setSyncingId(recordId);
+      try {
+        const result = await syncRecordToOfficeRegister(recordId);
+        /* Re-read rather than patch from the response: the sync columns belong
+           to the server, and reading them back is what keeps the screen honest
+           about what is actually stored.
+
+           Only the case on screen is replaced. Synchronising a record from the
+           awaiting list must not pull that record into the open wizard. */
+        const refreshed = await fetchRecord(recordId);
+        if (refreshed) setRecord((current) => (current?.id === recordId ? refreshed : current));
+
+        if (result.status === 'SYNCED') {
+          setAlert({
+            tone: 'success',
+            message: `Written to the office register${result.tab ? ` (${result.tab} tab)` : ''}.`,
+          });
+        } else {
+          /* Not an error state for the record — the register is behind, and the
+             officer is told what to do about it. */
+          setAlert({
+            tone: 'warning',
+            message:
+              result.message ??
+              'The office register was not updated. The Visa & Contract record is safe in HajjERP.',
+          });
+        }
+        return result.status;
+      } catch (e) {
+        console.error('Office register sync failed:', e);
+        /* An automatic attempt that fails must not read as though the
+           confirmation failed. The record is confirmed either way. */
+        setAlert({
+          tone: trigger === 'automatic' ? 'warning' : 'critical',
+          message:
+            e instanceof SheetSyncError
+              ? `${e.message}`
+              : 'The office register could not be updated. The Visa & Contract record is safe in HajjERP — retry the sync.',
+        });
+        /* The record is re-read even on failure, so the status bar shows the
+           SYNC_FAILED the server recorded rather than a stale NOT_SYNCED. */
+        try {
+          const refreshed = await fetchRecord(recordId);
+          if (refreshed) setRecord((current) => (current?.id === recordId ? refreshed : current));
+        } catch {
+          /* The sync state is a detail; failing to re-read it is not worth a
+             second message on top of the one already shown. */
+        }
+        return 'SYNC_FAILED' as const;
+      } finally {
+        setSyncingId(null);
+        setSyncListVersion((version) => version + 1);
+      }
+    },
+    [],
+  );
+
+  /** The "Sync now" / "Retry Sync" action on the status bar. */
+  const handleSyncToRegister = useCallback(() => {
+    if (!record || syncingId) return;
+    void runOfficeRegisterSync(record.id, 'manual');
+  }, [record, syncingId, runOfficeRegisterSync]);
+
+  /** The same action for a confirmed record the office copy is still missing. */
+  const handleSyncPendingRecord = useCallback(
+    (target: VisaContractRecord) => {
+      if (syncingId) return;
+      void runOfficeRegisterSync(target.id, 'manual');
+    },
+    [syncingId, runOfficeRegisterSync],
+  );
+
   // ── Save ───────────────────────────────────────────────────────────
   const handleConfirmSave = useCallback(async () => {
     /* A pilgrim link is NOT required. The record stands on its own — see
@@ -1090,6 +1194,17 @@ export default function VisaLoggerPage() {
             ? 'Visa & Contract record confirmed and linked to the pilgrim.'
             : 'Visa & Contract record confirmed. It remains Pending Pilgrim Match, which does not affect the record.',
       });
+
+      /* The office register is updated straight after confirmation, because the
+         office works from the spreadsheet and a confirmed visa it cannot see is
+         a visa nobody acts on.
+
+         Deliberately outside the try above and not awaited before the success
+         message: the confirmation has already happened and is not conditional on
+         Google. If the sync does not land, the officer gets a "Retry Sync"
+         action on the record — which is also the entry point for any record
+         confirmed before this existed, since none are back-filled automatically. */
+      void runOfficeRegisterSync(confirmed.id, 'automatic');
     } catch (e) {
       console.error('Save failed:', e);
       setAlert({
@@ -1102,7 +1217,7 @@ export default function VisaLoggerPage() {
     } finally {
       setSaving(false);
     }
-  }, [record, details, extraction, profile, isAdminOrHigher]);
+  }, [record, details, extraction, profile, isAdminOrHigher, runOfficeRegisterSync]);
 
   const handleProcessAnother = useCallback(() => {
     setDetails(emptyDetails());
@@ -1205,6 +1320,8 @@ export default function VisaLoggerPage() {
             persistFailed={persistFailed}
             retrying={retrying}
             onRetry={manualEntry && !file ? retryManualPersist : retryPersist}
+            syncing={syncingId === record?.id}
+            onSync={handleSyncToRegister}
           />
         </div>
       )}
@@ -1236,6 +1353,14 @@ export default function VisaLoggerPage() {
               <>
                 {/* Continue an open case rather than starting a duplicate. */}
                 <PendingReviewList onContinue={continueReview} />
+                {/* Confirmed visas the office spreadsheet has not been given
+                    yet. Nothing is back-filled, so this is the only route by
+                    which a record confirmed before M2 reaches the register. */}
+                <AwaitingSyncList
+                  key={syncListVersion}
+                  onSync={handleSyncPendingRecord}
+                  syncingId={syncingId}
+                />
                 <CaseDetailsCard
                   details={details}
                   onChange={handleDetailsChange}

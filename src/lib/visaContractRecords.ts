@@ -81,7 +81,8 @@ export const RECORD_COLUMNS =
   'makkah_hotel_id, makkah_hotel_name, madinah_hotel_id, madinah_hotel_name, ' +
   'transport_package, transport_summary, arrival_port, ' +
   'record_status, entry_source, pilgrim_id, pilgrim_match_status, ' +
-  'spreadsheet_sync_status, source_filename, source_mime_type, ' +
+  'spreadsheet_sync_status, spreadsheet_id, spreadsheet_tab, spreadsheet_row_ref, ' +
+  'last_synced_at, sync_error, source_filename, source_mime_type, ' +
   'extracted_at, extraction_model, extraction_metadata, ' +
   'client_case_key, created_by, created_at, updated_by, updated_at';
 
@@ -236,6 +237,31 @@ export async function fetchPendingReviewRecords(limit = 15): Promise<VisaContrac
     .select(RECORD_COLUMNS)
     .eq('record_status', 'PENDING_REVIEW')
     .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new VisaRecordError(error.message);
+  return (data as unknown as VisaContractRecord[]) ?? [];
+}
+
+/**
+ * Confirmed records the office spreadsheet does not yet reflect.
+ *
+ * This is the recovery surface for office-register synchronisation, and it
+ * exists because nothing is ever back-filled automatically. Records confirmed
+ * before synchronisation existed, records whose month tab had not been created
+ * yet, and records whose browser was closed between confirmation and the write
+ * all arrive here, and a person decides when each one is sent.
+ *
+ * Ordered oldest first: the record that has been missing from the office copy
+ * longest is the one most likely to be acted on incorrectly.
+ */
+export async function fetchAwaitingSyncRecords(limit = 15): Promise<VisaContractRecord[]> {
+  const { data, error } = await supabase
+    .from('visa_contract_records')
+    .select(RECORD_COLUMNS)
+    .eq('record_status', 'REVIEWED_CONFIRMED')
+    .in('spreadsheet_sync_status', ['NOT_SYNCED', 'SYNC_PENDING', 'SYNC_FAILED'])
+    .order('record_date', { ascending: true })
+    .order('created_at', { ascending: true })
     .limit(limit);
   if (error) throw new VisaRecordError(error.message);
   return (data as unknown as VisaContractRecord[]) ?? [];

@@ -30,7 +30,17 @@ export type RecordStatus = 'PENDING_REVIEW' | 'REVIEWED_CONFIRMED';
  */
 export type PilgrimMatchStatus = 'PENDING_PILGRIM_MATCH' | 'MATCHED';
 
-/** Office spreadsheet synchronisation. Nothing writes to Google in M1. */
+/**
+ * Office spreadsheet synchronisation.
+ *
+ * `SYNC_PENDING` is not a failure: it means the register is not ready for this
+ * record yet — most often because the month tab does not exist — and the office
+ * has something to do before a retry can succeed. `SYNC_FAILED` means an attempt
+ * was made and did not land.
+ *
+ * None of these ever reflect on the record itself. A visa is confirmed in HajjERP
+ * whether or not the office copy is up to date.
+ */
 export type SyncStatus = 'NOT_SYNCED' | 'SYNC_PENDING' | 'SYNCED' | 'SYNC_FAILED';
 
 /** Whether the traveller is Inna Ataina's own client or a Sub-Agent's. */
@@ -66,7 +76,23 @@ export interface VisaContractRecord {
   entry_source: EntrySource;
   pilgrim_id: string | null;
   pilgrim_match_status: PilgrimMatchStatus;
+
+  /*
+   * Where the office register stands for this record.
+   *
+   * Read-only as far as the browser is concerned. These are written by the
+   * `visa-contract-sheet-sync` Edge Function, and the database trigger restores
+   * them for any non-server writer — so a browser cannot claim a record is
+   * synced, or claim a row it does not own.
+   */
   spreadsheet_sync_status: SyncStatus;
+  spreadsheet_id: string | null;
+  /** The month tab written to, or the one the office still has to create. */
+  spreadsheet_tab: string | null;
+  spreadsheet_row_ref: string | null;
+  last_synced_at: string | null;
+  /** Why a sync is pending or failed, already written for a person to read. */
+  sync_error: string | null;
 
   source_filename: string | null;
   source_mime_type: string | null;

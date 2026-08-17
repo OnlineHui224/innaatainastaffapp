@@ -1,7 +1,8 @@
-import { AlertTriangle, Link2, Link2Off, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Link2, Link2Off, RefreshCw, TableProperties } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Identifier } from '@/components/ui/Field';
+import { canSyncToOfficeRegister, syncActionLabel } from '@/lib/visaSheetSync';
 import {
   PILGRIM_MATCH_LABELS,
   SYNC_STATUS_LABELS,
@@ -54,12 +55,18 @@ export function RecordStatusBar({
   persistFailed,
   retrying,
   onRetry,
+  syncing = false,
+  onSync,
 }: {
   record: VisaContractRecord | null;
   /** The case has values but no database row behind it. */
   persistFailed: boolean;
   retrying: boolean;
   onRetry: () => void;
+  /** An office-register synchronisation is in flight. */
+  syncing?: boolean;
+  /** Omitted where the office register is not actionable from this screen. */
+  onSync?: () => void;
 }) {
   /* No record and no failure means nothing has been started yet — the officer
      is still on step 1, and an empty status bar would be noise. */
@@ -97,6 +104,12 @@ export function RecordStatusBar({
 
   const confirmed = record.record_status === 'REVIEWED_CONFIRMED';
   const matched = record.pilgrim_match_status === 'MATCHED';
+  const synced = record.spreadsheet_sync_status === 'SYNCED';
+  /* Every confirmed record that is not synced is actionable, whatever the
+     reason — never sent, left pending on a missing month tab, or failed. That
+     is deliberate: records confirmed before this existed are not back-filled
+     automatically, and a browser closed mid-sync must leave a way back. */
+  const canSync = Boolean(onSync) && canSyncToOfficeRegister(record);
 
   return (
     <section
@@ -125,7 +138,15 @@ export function RecordStatusBar({
           tone={matched ? 'good' : 'pending'}
         />
         <Cell label="Responsibility" value={responsibilityLabel(record)} />
-        <Cell label="Office register" value={SYNC_STATUS_LABELS[record.spreadsheet_sync_status]} />
+        <Cell
+          label="Office register"
+          value={
+            synced && record.spreadsheet_tab
+              ? `${SYNC_STATUS_LABELS.SYNCED} — ${record.spreadsheet_tab}`
+              : SYNC_STATUS_LABELS[record.spreadsheet_sync_status]
+          }
+          tone={synced ? 'good' : 'neutral'}
+        />
       </dl>
 
       {/* Stated explicitly so nobody reads "Pending Pilgrim Match" as a fault. */}
@@ -133,6 +154,44 @@ export function RecordStatusBar({
         <p className="border-t border-slate-200 bg-white px-4 py-2.5 text-xs leading-relaxed text-slate-600">
           This record is complete. The traveller is not yet in Pilgrims, which does not affect the
           company&rsquo;s responsibility for this visa — it can be linked later.
+        </p>
+      )}
+
+      {/*
+        The office register is a copy, so its state is reported here rather than
+        alarmed about. What the officer needs is the reason and a way to act on
+        it — the server writes both, and neither is inferred in the browser.
+      */}
+      {canSync && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[0.8125rem] font-semibold text-navy-900">
+              {record.spreadsheet_sync_status === 'NOT_SYNCED'
+                ? 'Not yet written to the office register.'
+                : 'The office register is not up to date for this record.'}
+            </p>
+            <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
+              {record.sync_error ??
+                'This record is confirmed in HajjERP. Syncing adds or updates its row in the office spreadsheet.'}
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onSync}
+            loading={syncing}
+            icon={<TableProperties className="h-3.5 w-3.5" aria-hidden="true" />}
+          >
+            {syncActionLabel(record)}
+          </Button>
+        </div>
+      )}
+
+      {synced && record.last_synced_at && (
+        <p className="border-t border-slate-200 bg-white px-4 py-2 text-xs text-slate-600">
+          Written to the office register
+          {record.spreadsheet_tab ? ` (${record.spreadsheet_tab} tab)` : ''} on{' '}
+          {new Date(record.last_synced_at).toLocaleString()}.
         </p>
       )}
     </section>
